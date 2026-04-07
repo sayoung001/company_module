@@ -16,5 +16,8 @@ numpy>=1.24.0
 # OCR (Phase 4)
 requests>=2.31.0
 
+# PDF 분리 (Phase 5)
+PyPDF2>=3.0.0
+
 # exe 패키징
 pyinstaller>=6.0.0
