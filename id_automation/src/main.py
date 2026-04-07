@@ -9,6 +9,9 @@ Phase 4: OCR 검증
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
+import re
+import glob
+import shutil
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -502,7 +505,6 @@ class IDAutomationApp(ctk.CTk):
 
         def do_insert():
             # 원본 복사
-            import shutil
             shutil.copy2(scan_path, out_scan)
 
             result = self.image_handler.create_scan_with_mobile(
@@ -629,65 +631,124 @@ class IDAutomationApp(ctk.CTk):
 
         ctk.CTkLabel(
             frame,
-            text="OCR로 신분증을 읽어 엑셀 데이터와 비교 검증합니다.",
+            text="순번별 신분증이 종합양식 개인정보와 일치하는지 검증합니다.",
             font=ctk.CTkFont(size=13)
         ).pack(pady=(0, 10))
-
-        # API 설정
-        api_frame = ctk.CTkFrame(frame)
-        api_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(api_frame, text="Clova OCR URL:", width=110, anchor="e").pack(side="left", padx=5)
-        self.api_url_entry = ctk.CTkEntry(api_frame, width=500)
-        self.api_url_entry.pack(side="left", padx=5)
-
-        key_frame = ctk.CTkFrame(frame)
-        key_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(key_frame, text="Secret Key:", width=110, anchor="e").pack(side="left", padx=5)
-        self.api_secret_entry = ctk.CTkEntry(key_frame, width=350, show="*")
-        self.api_secret_entry.pack(side="left", padx=5)
-        ctk.CTkButton(key_frame, text="보기/숨기기", width=80,
-                       command=self.toggle_secret).pack(side="left", padx=5)
 
         # 파일 선택
         file_frame = ctk.CTkFrame(frame)
         file_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(file_frame, text="신분증 이미지:", width=110, anchor="e").pack(side="left", padx=5)
+        ctk.CTkLabel(file_frame, text="신분증 폴더:", width=100, anchor="e").pack(side="left", padx=5)
         self.verify_img_entry = ctk.CTkEntry(file_frame, width=350, state="readonly")
         self.verify_img_entry.pack(side="left", padx=5)
+        ctk.CTkButton(file_frame, text="폴더 선택", width=90,
+                       command=self.select_verify_folder).pack(side="left", padx=5)
         ctk.CTkButton(file_frame, text="파일 선택", width=90,
                        command=self.select_verify_images).pack(side="left", padx=5)
 
         excel_frame = ctk.CTkFrame(frame)
         excel_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(excel_frame, text="종합양식:", width=110, anchor="e").pack(side="left", padx=5)
+        ctk.CTkLabel(excel_frame, text="종합양식:", width=100, anchor="e").pack(side="left", padx=5)
         self.verify_excel_entry = ctk.CTkEntry(excel_frame, width=350, state="readonly")
         self.verify_excel_entry.pack(side="left", padx=5)
         ctk.CTkButton(excel_frame, text="파일 선택", width=90,
                        command=self.select_verify_excel).pack(side="left", padx=5)
 
-        # 결과
-        ctk.CTkLabel(frame, text="검증 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(10, 3))
-        self.verify_log = ctk.CTkTextbox(frame, height=200)
-        self.verify_log.pack(fill="both", expand=True)
+        # OCR API 설정 (선택사항)
+        api_toggle = ctk.CTkFrame(frame)
+        api_toggle.pack(fill="x", pady=5)
+        self.use_ocr_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(api_toggle, text="OCR 자동 검증 사용 (Clova API 필요)",
+                         variable=self.use_ocr_var,
+                         command=self._toggle_api_fields).pack(side="left", padx=5)
+
+        self.api_detail_frame = ctk.CTkFrame(frame)
+        # API 필드 (기본 숨김)
+        api_row1 = ctk.CTkFrame(self.api_detail_frame)
+        api_row1.pack(fill="x", pady=2)
+        ctk.CTkLabel(api_row1, text="OCR URL:", width=100, anchor="e").pack(side="left", padx=5)
+        self.api_url_entry = ctk.CTkEntry(api_row1, width=500)
+        self.api_url_entry.pack(side="left", padx=5)
+
+        api_row2 = ctk.CTkFrame(self.api_detail_frame)
+        api_row2.pack(fill="x", pady=2)
+        ctk.CTkLabel(api_row2, text="Secret Key:", width=100, anchor="e").pack(side="left", padx=5)
+        self.api_secret_entry = ctk.CTkEntry(api_row2, width=350, show="*")
+        self.api_secret_entry.pack(side="left", padx=5)
+
+        # 신분증 미리보기 + 엑셀 정보 대조 영역
+        preview_frame = ctk.CTkFrame(frame)
+        preview_frame.pack(fill="both", expand=True, pady=(8, 0))
+
+        # 좌측: 이미지 미리보기
+        self.preview_left = ctk.CTkFrame(preview_frame, width=300)
+        self.preview_left.pack(side="left", fill="both", expand=True, padx=(0, 5))
+
+        ctk.CTkLabel(self.preview_left, text="신분증 이미지",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=3)
+        self.img_preview_label = ctk.CTkLabel(self.preview_left, text="",
+                                               width=280, height=180)
+        self.img_preview_label.pack(pady=5)
+
+        # 이미지 탐색 버튼
+        nav_frame = ctk.CTkFrame(self.preview_left, fg_color="transparent")
+        nav_frame.pack(pady=3)
+        ctk.CTkButton(nav_frame, text="<< 이전", width=80,
+                       command=self.prev_verify_card).pack(side="left", padx=5)
+        self.card_index_label = ctk.CTkLabel(nav_frame, text="0 / 0", width=80)
+        self.card_index_label.pack(side="left", padx=5)
+        ctk.CTkButton(nav_frame, text="다음 >>", width=80,
+                       command=self.next_verify_card).pack(side="left", padx=5)
+
+        # 우측: 엑셀 데이터 + 검증 결과
+        self.preview_right = ctk.CTkFrame(preview_frame, width=400)
+        self.preview_right.pack(side="right", fill="both", expand=True, padx=(5, 0))
+
+        ctk.CTkLabel(self.preview_right, text="종합양식 정보 대조",
+                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=3)
+        self.verify_log = ctk.CTkTextbox(self.preview_right, height=180)
+        self.verify_log.pack(fill="both", expand=True, pady=5)
 
         # 버튼
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=(10, 0))
-        ctk.CTkButton(btn_frame, text="검증 실행", width=140,
+        btn_frame.pack(fill="x", pady=(8, 0))
+        ctk.CTkButton(btn_frame, text="순번 대조 검증", width=150,
                        fg_color="#2e7d32", hover_color="#1b5e20",
+                       command=self.run_order_verify).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="OCR 자동 검증", width=150,
                        command=self.run_verify).pack(side="left", padx=5)
 
-    def toggle_secret(self):
-        current = self.api_secret_entry.cget("show")
-        self.api_secret_entry.configure(show="" if current == "*" else "*")
+        # 검증 상태 변수
+        self.verify_cards = []
+        self.verify_excel_data = []
+        self.verify_current_idx = 0
+
+    def _toggle_api_fields(self):
+        if self.use_ocr_var.get():
+            self.api_detail_frame.pack(fill="x", pady=3)
+        else:
+            self.api_detail_frame.pack_forget()
+
+    def select_verify_folder(self):
+        path = filedialog.askdirectory(title="신분증 이미지 폴더 선택")
+        if path:
+            files = sorted(glob.glob(os.path.join(path, "*.jpg")) +
+                          glob.glob(os.path.join(path, "*.jpeg")) +
+                          glob.glob(os.path.join(path, "*.png")))
+            if files:
+                self.verify_images = files
+                self._set_entry(self.verify_img_entry,
+                              f"{path} ({len(files)}개)")
+                self.status_var.set(f"검증 대상: {len(files)}개 파일")
+            else:
+                messagebox.showwarning("경고", "폴더에 이미지 파일이 없습니다.")
 
     def select_verify_images(self):
         paths = filedialog.askopenfilenames(
             title="검증할 신분증 이미지 선택",
             filetypes=[("Image", "*.jpg *.jpeg *.png *.bmp")])
         if paths:
-            self.verify_images = list(paths)
+            self.verify_images = sorted(list(paths))
             self._set_entry(self.verify_img_entry,
                           f"{len(paths)}개 파일" if len(paths) > 1
                           else os.path.basename(paths[0]))
@@ -700,6 +761,133 @@ class IDAutomationApp(ctk.CTk):
             self.verify_excel = path
             self._set_entry(self.verify_excel_entry, os.path.basename(path))
 
+    # ---------- 순번 대조 검증 (API 불필요) ----------
+    def run_order_verify(self):
+        """파일명 순번과 엑셀 순번을 매칭하여 나란히 보여줌"""
+        if not self.verify_images:
+            messagebox.showwarning("경고", "신분증 이미지를 선택하세요.")
+            return
+        if not self.verify_excel:
+            messagebox.showwarning("경고", "종합양식 파일을 선택하세요.")
+            return
+
+        try:
+            self.verify_excel_data = self.excel_handler.read_source_data(
+                self.verify_excel)
+        except Exception as e:
+            messagebox.showerror("오류", f"엑셀 읽기 실패: {e}")
+            return
+
+        # 파일명에서 번호 추출하여 엑셀 순번과 매칭
+        self.verify_cards = []
+        for img_path in self.verify_images:
+            filename = os.path.basename(img_path)
+            # 파일명에서 숫자 추출 (주민-1.jpg → 1)
+            nums = re.findall(r'(\d+)', filename)
+            file_no = int(nums[-1]) if nums else 0
+
+            # 엑셀에서 매칭되는 행 찾기
+            excel_row = None
+            for row in self.verify_excel_data:
+                if row.get('no') == file_no:
+                    excel_row = row
+                    break
+
+            self.verify_cards.append({
+                'path': img_path,
+                'filename': filename,
+                'file_no': file_no,
+                'excel_row': excel_row,
+            })
+
+        self.verify_current_idx = 0
+        self._show_verify_card(0)
+
+        # 요약 로그
+        self.verify_log.delete("1.0", "end")
+        self.verify_log.insert("1.0", "=== 순번 대조 검증 ===\n\n")
+        matched = sum(1 for c in self.verify_cards if c['excel_row'])
+        self.verify_log.insert("end",
+            f"이미지: {len(self.verify_cards)}개\n"
+            f"엑셀 데이터: {len(self.verify_excel_data)}명\n"
+            f"매칭: {matched}건\n\n")
+
+        for card in self.verify_cards:
+            row = card['excel_row']
+            if row:
+                self.verify_log.insert("end",
+                    f"[No.{card['file_no']}] {card['filename']}\n"
+                    f"  엑셀: {row['name']} / {row['birth']} / "
+                    f"{row.get('phone', '')}\n"
+                    f"  << 이미지와 비교하여 확인하세요 >>\n\n")
+            else:
+                self.verify_log.insert("end",
+                    f"[No.{card['file_no']}] {card['filename']}\n"
+                    f"  !! 엑셀에 매칭되는 순번 없음\n\n")
+
+        self.status_var.set(
+            f"순번 대조: {len(self.verify_cards)}개 이미지, "
+            f"{matched}건 매칭 - 이미지를 확인하세요")
+
+    def _show_verify_card(self, idx):
+        """이미지 미리보기 + 엑셀 데이터 표시"""
+        if not self.verify_cards or idx < 0 or idx >= len(self.verify_cards):
+            return
+
+        self.verify_current_idx = idx
+        card = self.verify_cards[idx]
+
+        # 인덱스 표시
+        self.card_index_label.configure(
+            text=f"{idx + 1} / {len(self.verify_cards)}")
+
+        # 이미지 로드 및 표시
+        try:
+            pil_img = Image.open(card['path'])
+            # 미리보기 크기로 축소
+            max_w, max_h = 280, 175
+            pil_img.thumbnail((max_w, max_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(pil_img)
+            self.img_preview_label.configure(image=photo, text="")
+            self.img_preview_label._photo = photo  # 참조 유지
+        except Exception:
+            self.img_preview_label.configure(image=None,
+                text=f"이미지 로드 실패:\n{card['filename']}")
+
+        # 엑셀 정보 강조 표시
+        self.verify_log.delete("1.0", "end")
+        row = card['excel_row']
+        self.verify_log.insert("1.0",
+            f"파일: {card['filename']} (No.{card['file_no']})\n")
+        self.verify_log.insert("end", "-" * 40 + "\n\n")
+
+        if row:
+            self.verify_log.insert("end", "종합양식 정보:\n")
+            self.verify_log.insert("end", f"  순번: No.{row.get('no', '?')}\n")
+            self.verify_log.insert("end", f"  성명: {row.get('name', '?')}\n")
+            self.verify_log.insert("end", f"  생년월일: {row.get('birth', '?')}\n")
+            self.verify_log.insert("end", f"  전화번호: {row.get('phone', '?')}\n")
+            self.verify_log.insert("end",
+                f"  취약구분: {row.get('vulnerable', '일반')}\n")
+            self.verify_log.insert("end",
+                f"  결제: {row.get('payment', '')}\n\n")
+            self.verify_log.insert("end",
+                ">> 신분증 이미지의 이름/생년월일이\n"
+                ">> 위 정보와 일치하는지 확인하세요.\n")
+        else:
+            self.verify_log.insert("end",
+                "!! 엑셀에 매칭되는 순번이 없습니다.\n"
+                "!! 파일명의 번호를 확인하세요.\n")
+
+    def prev_verify_card(self):
+        if self.verify_current_idx > 0:
+            self._show_verify_card(self.verify_current_idx - 1)
+
+    def next_verify_card(self):
+        if self.verify_current_idx < len(self.verify_cards) - 1:
+            self._show_verify_card(self.verify_current_idx + 1)
+
+    # ---------- OCR 자동 검증 (API 필요) ----------
     def run_verify(self):
         if not self.verify_images:
             messagebox.showwarning("경고", "검증할 이미지를 선택하세요.")
@@ -713,16 +901,15 @@ class IDAutomationApp(ctk.CTk):
 
         if not api_url or not secret_key:
             messagebox.showwarning("경고",
-                "Naver Clova OCR API URL과 Secret Key를 입력하세요.\n\n"
-                "Naver Cloud Platform > AI/NAVER API > Clova OCR 에서\n"
-                "API 키를 발급받을 수 있습니다.")
+                "OCR 자동 검증에는 Clova API 키가 필요합니다.\n\n"
+                "API 없이 검증하려면 '순번 대조 검증' 버튼을 사용하세요.")
             return
 
         self.ocr_handler = OCRHandler(
             api_url=api_url, secret_key=secret_key, use_clova=True)
 
         self.verify_log.delete("1.0", "end")
-        self.verify_log.insert("1.0", "검증 시작...\n\n")
+        self.verify_log.insert("1.0", "OCR 검증 시작...\n\n")
         self.status_var.set("OCR 검증 중...")
 
         def do_verify():
@@ -730,17 +917,18 @@ class IDAutomationApp(ctk.CTk):
                 excel_data = self.excel_handler.read_source_data(self.verify_excel)
                 result = self.ocr_handler.verify_batch(
                     self.verify_images, excel_data)
-                self.after(0, lambda: self._show_verify_result(result))
+                self.after(0, lambda: self._show_ocr_verify_result(result))
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("오류", str(e)))
                 self.after(0, lambda: self.status_var.set("검증 오류"))
 
         threading.Thread(target=do_verify, daemon=True).start()
 
-    def _show_verify_result(self, result):
+    def _show_ocr_verify_result(self, result):
         self.verify_log.delete("1.0", "end")
-        self.verify_log.insert("1.0", f"{result['message']}\n")
-        self.verify_log.insert("end", "=" * 65 + "\n\n")
+        self.verify_log.insert("1.0", f"=== OCR 자동 검증 결과 ===\n")
+        self.verify_log.insert("end", f"{result['message']}\n")
+        self.verify_log.insert("end", "=" * 45 + "\n\n")
 
         for r in result.get('results', []):
             self.verify_log.insert("end", f"[{r['file']}]\n")
