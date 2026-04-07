@@ -2,11 +2,13 @@
 이미지 처리 핸들러
 Phase 2: 신분증 마스킹
 Phase 3: 종합 스캔에서 개별 신분증 분리 저장
+추가: 모바일 신분증 추출/삽입, 순번 매칭, 정밀 크롭
 """
 
 import cv2
 import numpy as np
 from pathlib import Path
+from datetime import datetime
 
 
 class ImageHandler:
@@ -189,34 +191,131 @@ class ImageHandler:
         return max(1, total)
 
     def _auto_crop_card(self, cell: np.ndarray) -> np.ndarray:
-        """그리드 셀 내에서 카드 영역만 크롭"""
+        """
+        그리드 셀 내에서 카드 영역만 정밀 크롭.
+        카드가 약간 흐트러져 있어도 정확히 잘라냄.
+        """
         h, w = cell.shape[:2]
         gray = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
 
-        # 블러 + 이진화로 카드 영역 감지
+        # 1단계: 강한 블러로 카드 내부 디테일 제거
+        heavy_blur = cv2.GaussianBlur(gray, (31, 31), 10)
+
+        # 2단계: 다중 threshold로 카드 영역 감지
+        # 배경(흰색)과 카드(상대적으로 어두움) 분리
+        _, mask_high = cv2.threshold(heavy_blur, 210, 255, cv2.THRESH_BINARY_INV)
+        _, mask_low = cv2.threshold(heavy_blur, 180, 255, cv2.THRESH_BINARY_INV)
+
+        # 두 마스크를 합침 (더 넓은 영역 감지)
+        mask = cv2.bitwise_or(mask_high, mask_low)
+
+        # 3단계: 모폴로지 - 카드 내부 빈 공간 채우기
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 40))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+
+        # 작은 노이즈 제거
+        kernel_open = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
+
+        # 4단계: 가장 큰 연결 영역 = 카드
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+
+        if contours:
+            # 면적이 가장 큰 컨투어 선택
+            largest = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest)
+
+            # 셀 면적의 20% 이상이어야 유효한 카드
+            if area > (w * h) * 0.20:
+                # 회전된 카드 처리: minAreaRect로 기울기 감지
+                rect = cv2.minAreaRect(largest)
+                angle = rect[2]
+                rect_w, rect_h = rect[1]
+
+                # 기울기가 작으면 (5도 이내) 단순 바운딩 박스 사용
+                if abs(angle) < 5 or abs(angle - 90) < 5 or abs(angle + 90) < 5:
+                    x, y, bw, bh = cv2.boundingRect(largest)
+                    margin = 3
+                    x = max(0, x - margin)
+                    y = max(0, y - margin)
+                    bw = min(w - x, bw + 2 * margin)
+                    bh = min(h - y, bh + 2 * margin)
+
+                    if bw > w * 0.4 and bh > h * 0.4:
+                        return cell[y:y+bh, x:x+bw]
+                else:
+                    # 기울어진 카드: 원근 보정
+                    corrected = self._correct_perspective(cell, largest)
+                    if corrected is not None:
+                        return corrected
+
+        # 폴백: 기본 threshold 방식
         blurred = cv2.GaussianBlur(gray, (21, 21), 5)
-        _, mask = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY_INV)
-
-        # 모폴로지
+        _, simple_mask = cv2.threshold(blurred, 200, 255, cv2.THRESH_BINARY_INV)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (20, 20))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+        simple_mask = cv2.morphologyEx(simple_mask, cv2.MORPH_CLOSE, kernel)
 
-        coords = cv2.findNonZero(mask)
+        coords = cv2.findNonZero(simple_mask)
         if coords is not None:
             x, y, bw, bh = cv2.boundingRect(coords)
-            # 적절한 마진
-            margin = 5
+            margin = 3
             x = max(0, x - margin)
             y = max(0, y - margin)
             bw = min(w - x, bw + 2 * margin)
             bh = min(h - y, bh + 2 * margin)
-
-            # 너무 작은 크롭 방지 (원본의 50% 이상)
-            if bw > w * 0.5 and bh > h * 0.5:
+            if bw > w * 0.4 and bh > h * 0.4:
                 return cell[y:y+bh, x:x+bw]
 
         return cell
+
+    def _correct_perspective(self, img: np.ndarray,
+                             contour: np.ndarray) -> np.ndarray:
+        """기울어진 카드를 원근 보정하여 반듯하게 만듦"""
+        peri = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+
+        if len(approx) == 4:
+            pts = approx.reshape(4, 2).astype(np.float32)
+        else:
+            # 4꼭짓점이 아니면 minAreaRect의 꼭짓점 사용
+            rect = cv2.minAreaRect(contour)
+            pts = cv2.boxPoints(rect).astype(np.float32)
+
+        # 꼭짓점 정렬: 좌상, 우상, 우하, 좌하
+        s = pts.sum(axis=1)
+        d = np.diff(pts, axis=1).flatten()
+        ordered = np.array([
+            pts[np.argmin(s)],   # 좌상
+            pts[np.argmin(d)],   # 우상
+            pts[np.argmax(s)],   # 우하
+            pts[np.argmax(d)],   # 좌하
+        ], dtype=np.float32)
+
+        # 출력 크기 계산
+        w1 = np.linalg.norm(ordered[1] - ordered[0])
+        w2 = np.linalg.norm(ordered[2] - ordered[3])
+        h1 = np.linalg.norm(ordered[3] - ordered[0])
+        h2 = np.linalg.norm(ordered[2] - ordered[1])
+
+        out_w = int(max(w1, w2))
+        out_h = int(max(h1, h2))
+
+        if out_w < 50 or out_h < 50:
+            return None
+
+        # 가로가 세로보다 짧으면 90도 회전된 것
+        if out_w < out_h:
+            out_w, out_h = out_h, out_w
+            ordered = np.roll(ordered, -1, axis=0)
+
+        dst = np.array([
+            [0, 0], [out_w, 0],
+            [out_w, out_h], [0, out_h]
+        ], dtype=np.float32)
+
+        M = cv2.getPerspectiveTransform(ordered, dst)
+        return cv2.warpPerspective(img, M, (out_w, out_h))
 
     # ==================== Phase 2: 마스킹 ====================
 
@@ -361,3 +460,367 @@ class ImageHandler:
             return '주민등록증_구형'
 
         return '주민등록증_신형'
+
+    # ==================== 모바일 신분증 추출/삽입 ====================
+
+    def extract_card_from_photo(self, photo_path: str,
+                                output_path: str = None) -> dict:
+        """
+        사진(핸드폰 촬영)에서 신분증 카드 영역을 추출.
+        배경을 제거하고 카드만 반듯하게 크롭.
+
+        Args:
+            photo_path: 촬영한 사진 경로
+            output_path: 저장 경로 (None이면 저장 안 함)
+
+        Returns:
+            dict: {'success': bool, 'image': np.ndarray, 'message': str}
+        """
+        try:
+            img = cv2.imread(photo_path)
+            if img is None:
+                return {'success': False, 'image': None,
+                        'message': f'이미지를 열 수 없습니다: {photo_path}'}
+
+            card = self._detect_card_in_photo(img)
+            if card is None:
+                return {'success': False, 'image': None,
+                        'message': '사진에서 신분증을 찾을 수 없습니다.'}
+
+            if output_path:
+                Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+                cv2.imwrite(output_path, card, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+            return {
+                'success': True,
+                'image': card,
+                'size': (card.shape[1], card.shape[0]),
+                'message': f'신분증 추출 완료 ({card.shape[1]}x{card.shape[0]})'
+            }
+
+        except Exception as e:
+            return {'success': False, 'image': None,
+                    'message': f'추출 중 오류: {str(e)}'}
+
+    def _detect_card_in_photo(self, img: np.ndarray) -> np.ndarray:
+        """사진에서 가장 큰 사각형(카드)을 찾아 원근 보정"""
+        h, w = img.shape[:2]
+
+        # 축소하여 처리 (성능)
+        max_dim = 1500
+        scale = min(max_dim / w, max_dim / h, 1.0)
+        if scale < 1.0:
+            small = cv2.resize(img, None, fx=scale, fy=scale)
+        else:
+            small = img.copy()
+
+        gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+
+        # 여러 방법으로 카드 에지 검출 시도
+        card_contour = None
+
+        # 방법 1: Canny 에지
+        for canny_low, canny_high in [(30, 100), (20, 80), (50, 150)]:
+            edges = cv2.Canny(blurred, canny_low, canny_high)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            edges = cv2.dilate(edges, kernel, iterations=2)
+
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+
+            # 면적 기준 정렬
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+            for cnt in contours[:10]:
+                area = cv2.contourArea(cnt)
+                if area < (small.shape[0] * small.shape[1]) * 0.05:
+                    continue
+
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+
+                if len(approx) == 4:
+                    card_contour = approx
+                    break
+
+            if card_contour is not None:
+                break
+
+        # 방법 2: 적응형 threshold
+        if card_contour is None:
+            thresh = cv2.adaptiveThreshold(blurred, 255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 15, 3)
+            thresh = cv2.bitwise_not(thresh)
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (10, 10))
+            thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+
+            for cnt in contours[:10]:
+                area = cv2.contourArea(cnt)
+                if area < (small.shape[0] * small.shape[1]) * 0.05:
+                    continue
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+                if len(approx) == 4:
+                    card_contour = approx
+                    break
+
+        if card_contour is None:
+            # 폴백: 가장 큰 컨투어의 minAreaRect
+            if contours:
+                largest = max(contours, key=cv2.contourArea)
+                if cv2.contourArea(largest) > (small.shape[0] * small.shape[1]) * 0.05:
+                    rect = cv2.minAreaRect(largest)
+                    card_contour = cv2.boxPoints(rect).astype(np.int32)
+
+        if card_contour is None:
+            return None
+
+        # 원본 스케일로 좌표 변환
+        pts = card_contour.reshape(-1, 2).astype(np.float32) / scale
+
+        # 꼭짓점 정렬
+        s = pts.sum(axis=1)
+        d = np.diff(pts, axis=1).flatten()
+        ordered = np.array([
+            pts[np.argmin(s)],
+            pts[np.argmin(d)],
+            pts[np.argmax(s)],
+            pts[np.argmax(d)],
+        ], dtype=np.float32)
+
+        # 출력 크기
+        w1 = np.linalg.norm(ordered[1] - ordered[0])
+        w2 = np.linalg.norm(ordered[2] - ordered[3])
+        h1 = np.linalg.norm(ordered[3] - ordered[0])
+        h2 = np.linalg.norm(ordered[2] - ordered[1])
+        out_w = int(max(w1, w2))
+        out_h = int(max(h1, h2))
+
+        if out_w < 100 or out_h < 100:
+            return None
+
+        # 세로가 더 길면 90도 회전
+        if out_w < out_h:
+            out_w, out_h = out_h, out_w
+            ordered = np.roll(ordered, -1, axis=0)
+
+        dst = np.array([
+            [0, 0], [out_w, 0],
+            [out_w, out_h], [0, out_h]
+        ], dtype=np.float32)
+
+        M = cv2.getPerspectiveTransform(ordered, dst)
+        return cv2.warpPerspective(img, M, (out_w, out_h))
+
+    def insert_card_into_scan(self, scan_path: str, card_img: np.ndarray,
+                               position: int, cols: int = 2,
+                               total_cards: int = 0,
+                               output_path: str = None) -> dict:
+        """
+        추출한 카드를 종합 스캔 이미지의 지정 위치에 삽입.
+
+        Args:
+            scan_path: 기존 종합 스캔 이미지 경로
+            card_img: 삽입할 카드 이미지 (numpy array)
+            position: 삽입 위치 (1-based, 좌→우, 위→아래 순서)
+            cols: 열 수
+            total_cards: 총 카드 수
+            output_path: 저장 경로 (None이면 원본 덮어쓰기)
+
+        Returns:
+            dict: {'success': bool, 'message': str}
+        """
+        try:
+            scan = cv2.imread(scan_path)
+            if scan is None:
+                return {'success': False,
+                        'message': f'스캔 이미지를 열 수 없습니다: {scan_path}'}
+
+            h, w = scan.shape[:2]
+            content_box = self._find_content_area(scan)
+            cx, cy, cw, ch = content_box
+
+            if total_cards <= 0:
+                total_cards = self._estimate_card_count(scan, content_box, cols)
+
+            rows = -(-total_cards // cols)
+            cell_w = cw / cols
+            cell_h = ch / rows
+
+            # position (1-based) → row, col
+            pos_idx = position - 1
+            row = pos_idx // cols
+            col = pos_idx % cols
+
+            x1 = int(cx + col * cell_w)
+            y1 = int(cy + row * cell_h)
+            target_w = int(cell_w)
+            target_h = int(cell_h)
+
+            # 카드를 셀 크기에 맞게 리사이즈 (여백 포함)
+            card_h, card_w = card_img.shape[:2]
+            scale = min((target_w - 20) / card_w, (target_h - 20) / card_h)
+            new_w = int(card_w * scale)
+            new_h = int(card_h * scale)
+            resized = cv2.resize(card_img, (new_w, new_h),
+                                interpolation=cv2.INTER_AREA)
+
+            # 셀 중앙에 배치
+            pad_x = (target_w - new_w) // 2
+            pad_y = (target_h - new_h) // 2
+
+            # 기존 셀 영역을 흰색으로 초기화 후 카드 삽입
+            scan[y1:y1+target_h, x1:x1+target_w] = 255
+            insert_y = y1 + pad_y
+            insert_x = x1 + pad_x
+            scan[insert_y:insert_y+new_h, insert_x:insert_x+new_w] = resized
+
+            save_path = output_path or scan_path
+            cv2.imwrite(save_path, scan, [cv2.IMWRITE_JPEG_QUALITY, 95])
+
+            return {
+                'success': True,
+                'saved_path': save_path,
+                'message': f'{position}번 위치에 카드 삽입 완료'
+            }
+
+        except Exception as e:
+            return {'success': False, 'message': f'삽입 중 오류: {str(e)}'}
+
+    def create_scan_with_mobile(self, scan_path: str, photo_paths: list,
+                                 positions: list, cols: int = 2,
+                                 total_cards: int = 0,
+                                 output_path: str = None) -> dict:
+        """
+        여러 모바일 사진을 종합 스캔에 일괄 삽입.
+
+        Args:
+            scan_path: 기존 스캔 이미지 경로
+            photo_paths: 모바일 사진 경로 리스트
+            positions: 각 사진의 삽입 위치 리스트 (1-based)
+            cols, total_cards: 그리드 설정
+            output_path: 저장 경로
+        """
+        try:
+            results = []
+            current_scan = scan_path
+            save = output_path or scan_path
+
+            for photo_path, pos in zip(photo_paths, positions):
+                # 1. 사진에서 카드 추출
+                extract = self.extract_card_from_photo(photo_path)
+                if not extract['success']:
+                    results.append({'file': Path(photo_path).name,
+                                   'position': pos, **extract})
+                    continue
+
+                # 2. 스캔에 삽입
+                insert = self.insert_card_into_scan(
+                    current_scan, extract['image'], pos,
+                    cols, total_cards, save)
+
+                current_scan = save  # 이후 삽입은 업데이트된 파일에
+                results.append({'file': Path(photo_path).name,
+                               'position': pos, **insert})
+
+            success = sum(1 for r in results if r.get('success'))
+            return {
+                'success': success > 0,
+                'total': len(photo_paths),
+                'success_count': success,
+                'results': results,
+                'message': f'{len(photo_paths)}건 중 {success}건 삽입 완료'
+            }
+
+        except Exception as e:
+            return {'success': False, 'total': 0, 'success_count': 0,
+                    'results': [], 'message': f'처리 중 오류: {str(e)}'}
+
+    # ==================== 순번 매칭 저장 ====================
+
+    def split_with_name_order(self, scan_path: str, output_dir: str,
+                               name_list: list, prefix: str = "주민",
+                               cols: int = 2, total_cards: int = 0) -> dict:
+        """
+        종합 스캔을 분리할 때, 엑셀 종합양식의 순번(이름 순서)에 맞춰 저장.
+        스캔 순서(좌→우, 위→아래)가 엑셀 순서와 동일하다고 가정.
+
+        Args:
+            scan_path: 스캔 이미지 경로
+            output_dir: 출력 디렉토리
+            name_list: [{'no': 1, 'name': '임지혁'}, ...] 엑셀 순서
+            prefix: 파일명 접두사
+            cols: 열 수
+            total_cards: 총 카드 수 (0이면 name_list 길이 사용)
+        """
+        try:
+            if total_cards <= 0:
+                total_cards = len(name_list)
+
+            # 분리 실행
+            split_result = self.split_scan_image(
+                scan_path, output_dir, prefix, 1, cols, total_cards)
+
+            if not split_result['success']:
+                return split_result
+
+            # 파일명을 엑셀 순번에 맞게 변경
+            out_path = Path(output_dir)
+            renamed_files = []
+            mapping = []
+
+            for i, filepath in enumerate(split_result['files']):
+                if i < len(name_list):
+                    entry = name_list[i]
+                    no = entry.get('no', i + 1)
+                    name = entry.get('name', '')
+                    new_filename = f"{prefix}-{no}.jpg"
+                else:
+                    no = i + 1
+                    name = ''
+                    new_filename = f"{prefix}-{no}.jpg"
+
+                old_path = Path(filepath)
+                new_path = out_path / new_filename
+
+                # 파일명이 같으면 건너뜀
+                if old_path != new_path:
+                    # 임시 이름으로 먼저 변경 (충돌 방지)
+                    tmp_path = out_path / f"_tmp_{no}_{old_path.name}"
+                    old_path.rename(tmp_path)
+                    renamed_files.append((tmp_path, new_path))
+                else:
+                    renamed_files.append((old_path, new_path))
+
+                mapping.append({
+                    'no': no,
+                    'name': name,
+                    'file': new_filename,
+                    'scan_position': i + 1
+                })
+
+            # 임시 파일을 최종 이름으로 변경
+            final_files = []
+            for tmp, final in renamed_files:
+                if tmp != final:
+                    if final.exists():
+                        final.unlink()
+                    tmp.rename(final)
+                final_files.append(str(final))
+
+            return {
+                'success': True,
+                'count': len(final_files),
+                'files': final_files,
+                'mapping': mapping,
+                'message': f'{len(final_files)}개 신분증을 순번에 맞춰 저장했습니다.'
+            }
+
+        except Exception as e:
+            return {'success': False, 'count': 0, 'files': [],
+                    'mapping': [], 'message': f'순번 저장 중 오류: {str(e)}'}

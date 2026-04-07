@@ -40,6 +40,8 @@ class IDAutomationApp(ctk.CTk):
         self.id_files = []        # 개별 신분증 이미지들
         self.verify_images = []
         self.verify_excel = None
+        self.split_excel_path = None
+        self.mobile_photos = []
 
         # 핸들러
         self.excel_handler = ExcelHandler()
@@ -363,17 +365,44 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkButton(out_frame, text="변경", width=60,
                        command=self.select_split_output_dir).pack(side="left", padx=5)
 
-        # 마스킹 동시 처리 옵션
+        # 옵션 체크박스
+        chk_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        chk_frame.pack(fill="x", pady=5)
+
         self.split_mask_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            frame, text="분리 후 마스킹도 함께 처리",
-            variable=self.split_mask_var
-        ).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(chk_frame, text="분리 후 마스킹",
+                         variable=self.split_mask_var).pack(side="left", padx=10)
+
+        self.name_order_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(chk_frame, text="종합양식 순번으로 저장",
+                         variable=self.name_order_var).pack(side="left", padx=10)
+
+        # 종합양식 파일 (순번 매칭용)
+        excel_frame = ctk.CTkFrame(frame)
+        excel_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(excel_frame, text="종합양식:", width=100, anchor="e").pack(side="left", padx=5)
+        self.split_excel_entry = ctk.CTkEntry(excel_frame, width=350, state="readonly")
+        self.split_excel_entry.pack(side="left", padx=5)
+        ctk.CTkButton(excel_frame, text="파일 선택", width=90,
+                       command=self.select_split_excel).pack(side="left", padx=5)
+
+        # 모바일 신분증 추가
+        mobile_frame = ctk.CTkFrame(frame)
+        mobile_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(mobile_frame, text="모바일 사진:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mobile_entry = ctk.CTkEntry(mobile_frame, width=250, state="readonly")
+        self.mobile_entry.pack(side="left", padx=5)
+        ctk.CTkButton(mobile_frame, text="사진 선택", width=80,
+                       command=self.select_mobile_photos).pack(side="left", padx=5)
+        ctk.CTkLabel(mobile_frame, text="위치:", width=35).pack(side="left", padx=2)
+        self.mobile_pos_entry = ctk.CTkEntry(mobile_frame, width=80,
+                                              placeholder_text="예: 3,7")
+        self.mobile_pos_entry.pack(side="left", padx=2)
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(10, 3))
-        self.split_log = ctk.CTkTextbox(frame, height=220)
+                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(8, 3))
+        self.split_log = ctk.CTkTextbox(frame, height=150)
         self.split_log.pack(fill="both", expand=True)
 
         # 버튼
@@ -382,6 +411,8 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkButton(btn_frame, text="분리 실행", width=140,
                        fg_color="#2e7d32", hover_color="#1b5e20",
                        command=self.run_split).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="모바일 삽입", width=140,
+                       command=self.run_mobile_insert).pack(side="left", padx=5)
 
     def select_scan_file(self):
         paths = filedialog.askopenfilenames(
@@ -400,6 +431,97 @@ class IDAutomationApp(ctk.CTk):
         if path:
             self.split_out_entry.delete(0, "end")
             self.split_out_entry.insert(0, path)
+
+    def select_split_excel(self):
+        path = filedialog.askopenfilename(
+            title="종합양식 파일 선택 (순번 매칭용)",
+            filetypes=[("Excel", "*.xlsx *.xls")])
+        if path:
+            self.split_excel_path = path
+            self._set_entry(self.split_excel_entry, os.path.basename(path))
+
+    def select_mobile_photos(self):
+        paths = filedialog.askopenfilenames(
+            title="모바일 신분증 사진 선택",
+            filetypes=[("Image", "*.jpg *.jpeg *.png *.bmp")])
+        if paths:
+            self.mobile_photos = list(paths)
+            self._set_entry(self.mobile_entry,
+                          f"{len(paths)}개 사진" if len(paths) > 1
+                          else os.path.basename(paths[0]))
+
+    def run_mobile_insert(self):
+        """모바일 사진을 종합 스캔에 삽입"""
+        if not hasattr(self, 'mobile_photos') or not self.mobile_photos:
+            messagebox.showwarning("경고", "모바일 사진을 선택하세요.")
+            return
+        if not self.scan_files:
+            messagebox.showwarning("경고", "스캔 이미지를 먼저 선택하세요.")
+            return
+
+        pos_text = self.mobile_pos_entry.get().strip()
+        if not pos_text:
+            messagebox.showwarning("경고",
+                "삽입 위치를 입력하세요. (예: 3,7)")
+            return
+
+        try:
+            positions = [int(p.strip()) for p in pos_text.split(',')]
+        except ValueError:
+            messagebox.showwarning("경고", "위치는 숫자를 쉼표로 구분하세요. (예: 3,7)")
+            return
+
+        if len(positions) != len(self.mobile_photos):
+            messagebox.showwarning("경고",
+                f"사진 {len(self.mobile_photos)}개에 맞게 위치를 "
+                f"{len(self.mobile_photos)}개 입력하세요.")
+            return
+
+        try:
+            cols = int(self.cols_entry.get())
+        except ValueError:
+            cols = 2
+        try:
+            total_cards = int(self.total_entry.get())
+        except ValueError:
+            total_cards = 0
+
+        scan_path = self.scan_files[0]
+        output_dir = self.split_out_entry.get()
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(os.path.dirname(scan_path), output_dir)
+
+        # 출력 파일 경로
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
+        out_scan = os.path.join(output_dir,
+            os.path.basename(scan_path).replace('.', '_모바일삽입.'))
+
+        self.split_log.delete("1.0", "end")
+        self.split_log.insert("1.0", "모바일 삽입 시작...\n\n")
+        self.status_var.set("모바일 삽입 중...")
+
+        def do_insert():
+            # 원본 복사
+            import shutil
+            shutil.copy2(scan_path, out_scan)
+
+            result = self.image_handler.create_scan_with_mobile(
+                out_scan, self.mobile_photos, positions,
+                cols, total_cards, out_scan)
+            self.after(0, lambda: self._show_mobile_result(result))
+
+        threading.Thread(target=do_insert, daemon=True).start()
+
+    def _show_mobile_result(self, result):
+        self.split_log.delete("1.0", "end")
+        self.split_log.insert("1.0", f"{result['message']}\n\n")
+        for r in result.get('results', []):
+            status = "OK" if r.get('success') else "FAIL"
+            self.split_log.insert("end",
+                f"[{status}] {r.get('file', '?')} -> 위치 {r.get('position', '?')}\n"
+                f"    {r.get('message', '')}\n")
+        self.status_var.set(result['message'])
+        messagebox.showinfo("완료", result['message'])
 
     def run_split(self):
         if not self.scan_files:
@@ -430,6 +552,17 @@ class IDAutomationApp(ctk.CTk):
         self.split_log.insert("1.0", "분리 처리 시작...\n\n")
         self.status_var.set("분리 처리 중...")
 
+        # 순번 매칭 여부
+        use_name_order = self.name_order_var.get()
+        name_list = None
+        if use_name_order and hasattr(self, 'split_excel_path') and self.split_excel_path:
+            try:
+                data = self.excel_handler.read_source_data(self.split_excel_path)
+                name_list = [{'no': r.get('no', i+1), 'name': r.get('name', '')}
+                             for i, r in enumerate(data)]
+            except Exception:
+                name_list = None
+
         def do_split():
             all_results = []
             current_num = start_num
@@ -439,7 +572,12 @@ class IDAutomationApp(ctk.CTk):
                 self.after(0, lambda f=filename:
                     self.split_log.insert("end", f"처리 중: {f}\n"))
 
-                if do_mask:
+                if name_list and not do_mask:
+                    # 순번 매칭 분리
+                    result = self.image_handler.split_with_name_order(
+                        scan_path, output_dir, name_list, prefix,
+                        cols, total_cards)
+                elif do_mask:
                     result = self.image_handler.mask_combined_scan(
                         scan_path, output_dir, prefix, current_num,
                         cols, total_cards)
@@ -468,8 +606,16 @@ class IDAutomationApp(ctk.CTk):
                 f"[{'OK' if r['success'] else 'FAIL'}] {r['file']}\n"
                 f"    {r['message']}\n")
 
-            for f in r.get('files', []):
-                self.split_log.insert("end", f"    -> {os.path.basename(f)}\n")
+            # 순번 매칭 정보 표시
+            for m in r.get('mapping', []):
+                self.split_log.insert("end",
+                    f"    No.{m['no']} {m['name']} -> {m['file']}\n")
+
+            # 매핑 없으면 파일 목록 표시
+            if not r.get('mapping'):
+                for f in r.get('files', []):
+                    self.split_log.insert("end",
+                        f"    -> {os.path.basename(f)}\n")
             self.split_log.insert("end", "\n")
 
         msg = f"총 {total_count}개 신분증 분리 완료"
