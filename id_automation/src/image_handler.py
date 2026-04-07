@@ -11,6 +11,24 @@ from pathlib import Path
 from datetime import datetime
 
 
+def _imread(path: str) -> np.ndarray:
+    """한글 경로 지원 이미지 읽기 (Windows 호환)"""
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return img
+
+
+def _imwrite(path: str, img: np.ndarray,
+             params=None) -> bool:
+    """한글 경로 지원 이미지 저장 (Windows 호환)"""
+    if params is None:
+        params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+    ext = Path(path).suffix.lower()
+    result, encoded = cv2.imencode(ext, img, params)
+    if result:
+        encoded.tofile(path)
+    return result
+
+
 class ImageHandler:
     # 한국 신분증 표준 비율 (가로:세로)
     ID_ASPECT_RATIO = 1.58  # 85.6mm x 53.98mm
@@ -68,7 +86,7 @@ class ImageHandler:
             total_cards: 총 카드 수 (0이면 자동 감지)
         """
         try:
-            img = cv2.imread(scan_path)
+            img = _imread(scan_path)
             if img is None:
                 return {'success': False, 'count': 0, 'files': [],
                         'message': f'이미지를 열 수 없습니다: {scan_path}'}
@@ -119,7 +137,7 @@ class ImageHandler:
                     num = start_num + card_idx
                     filename = f"{prefix}-{num}.jpg"
                     filepath = str(out_path / filename)
-                    cv2.imwrite(filepath, card_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    _imwrite(filepath, card_img)
                     saved_files.append(filepath)
                     card_idx += 1
 
@@ -324,7 +342,7 @@ class ImageHandler:
                      mask_color: tuple = (255, 255, 255)) -> dict:
         """개별 신분증 이미지를 마스킹"""
         try:
-            img = cv2.imread(image_path)
+            img = _imread(image_path)
             if img is None:
                 return {'success': False, 'card_type': '', 'masked_regions': [],
                         'message': f'이미지를 열 수 없습니다: {image_path}'}
@@ -350,7 +368,7 @@ class ImageHandler:
                 masked_regions.append(region['label'])
 
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            _imwrite(output_path, img)
 
             type_name = self.MASK_REGIONS[card_type]['name']
             return {
@@ -477,7 +495,7 @@ class ImageHandler:
             dict: {'success': bool, 'image': np.ndarray, 'message': str}
         """
         try:
-            img = cv2.imread(photo_path)
+            img = _imread(photo_path)
             if img is None:
                 return {'success': False, 'image': None,
                         'message': f'이미지를 열 수 없습니다: {photo_path}'}
@@ -489,7 +507,7 @@ class ImageHandler:
 
             if output_path:
                 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(output_path, card, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                _imwrite(output_path, card)
 
             return {
                 'success': True,
@@ -636,7 +654,7 @@ class ImageHandler:
             dict: {'success': bool, 'message': str}
         """
         try:
-            scan = cv2.imread(scan_path)
+            scan = _imread(scan_path)
             if scan is None:
                 return {'success': False,
                         'message': f'스캔 이미지를 열 수 없습니다: {scan_path}'}
@@ -681,7 +699,7 @@ class ImageHandler:
             scan[insert_y:insert_y+new_h, insert_x:insert_x+new_w] = resized
 
             save_path = output_path or scan_path
-            cv2.imwrite(save_path, scan, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            _imwrite(save_path, scan)
 
             return {
                 'success': True,

@@ -166,6 +166,95 @@ class ExcelHandler:
                 'count': 0
             }
     
+    def save_attendance(self, source_path: str, output_dir: str = "",
+                        date_str: str = "") -> dict:
+        """
+        종합양식의 출석부양식 시트에서 A~I열, 헤더+N명 데이터를
+        출석부양식_YYYYMMDD.xlsx로 저장. 별도 출석부 파일 불필요.
+        """
+        try:
+            import re as _re
+            wb = load_workbook(source_path, data_only=True)
+
+            sheet_name = None
+            for name in wb.sheetnames:
+                if '출석부' in name:
+                    sheet_name = name
+                    break
+
+            if not sheet_name:
+                wb.close()
+                return {'success': False, 'message': "'출석부양식' 시트를 찾을 수 없습니다.", 'count': 0}
+
+            ws = wb[sheet_name]
+
+            # 날짜 추출
+            if not date_str:
+                match = _re.search(r'(\d{6,8})', os.path.basename(source_path))
+                date_str = match.group(1) if match else datetime.now().strftime('%Y%m%d')
+
+            # 데이터 행 수 (이름이 있는 행까지)
+            data_rows = 0
+            for row_idx in range(2, ws.max_row + 1):
+                name_val = ws.cell(row=row_idx, column=2).value
+                if name_val and str(name_val).strip() and str(name_val) != 'NaN':
+                    data_rows = row_idx
+                else:
+                    break
+
+            # 새 워크북 생성, A~I열(1~9) / 헤더(1행) + 데이터(2~N+1행) 복사
+            from openpyxl import Workbook
+            new_wb = Workbook()
+            new_ws = new_wb.active
+            new_ws.title = "출석부양식"
+
+            thin_border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
+            center_align = Alignment(horizontal='center', vertical='center')
+
+            for row_idx in range(1, data_rows + 1):
+                for col_idx in range(1, 10):  # A~I = 1~9
+                    src_cell = ws.cell(row=row_idx, column=col_idx)
+                    dst_cell = new_ws.cell(row=row_idx, column=col_idx,
+                                           value=src_cell.value)
+                    dst_cell.border = thin_border
+                    dst_cell.alignment = center_align
+                    if src_cell.font:
+                        dst_cell.font = Font(
+                            bold=src_cell.font.bold,
+                            size=src_cell.font.size or 10)
+
+            # 열 너비 조정
+            col_widths = {'A': 5, 'B': 10, 'C': 12, 'D': 14, 'E': 6,
+                          'F': 8, 'G': 10, 'H': 10, 'I': 8}
+            for col_letter, width in col_widths.items():
+                new_ws.column_dimensions[col_letter].width = width
+
+            wb.close()
+
+            # 저장
+            if not output_dir:
+                output_dir = os.path.dirname(source_path)
+            os.makedirs(output_dir, exist_ok=True)
+
+            person_count = data_rows - 1  # 헤더 제외
+            filename = f"출석부양식_{date_str}.xlsx"
+            save_path = os.path.join(output_dir, filename)
+            new_wb.save(save_path)
+            new_wb.close()
+
+            return {
+                'success': True,
+                'message': f'출석부 저장 완료: {filename} ({person_count}명)',
+                'count': person_count,
+                'saved_path': save_path
+            }
+
+        except Exception as e:
+            return {'success': False, 'message': str(e), 'count': 0}
+
     def get_summary(self, source_path: str) -> dict:
         """종합 통계 조회"""
         data = self.read_source_data(source_path)

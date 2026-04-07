@@ -111,7 +111,7 @@ class IDAutomationApp(ctk.CTk):
 
         ctk.CTkLabel(
             frame,
-            text="종합양식의 데이터를 출석부양식으로 자동 복사합니다.",
+            text="종합양식에서 출석부양식(A~I열)을 추출하여 저장합니다.",
             font=ctk.CTkFont(size=13)
         ).pack(pady=(0, 15))
 
@@ -124,19 +124,10 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkButton(src_frame, text="찾아보기", width=90,
                        command=self.select_source_file).pack(side="left", padx=5)
 
-        # 출석부양식 파일 선택
-        tgt_frame = ctk.CTkFrame(frame)
-        tgt_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(tgt_frame, text="출석부양식:", width=90, anchor="e").pack(side="left", padx=5)
-        self.target_entry = ctk.CTkEntry(tgt_frame, width=450, state="readonly")
-        self.target_entry.pack(side="left", padx=5)
-        ctk.CTkButton(tgt_frame, text="찾아보기", width=90,
-                       command=self.select_target_file).pack(side="left", padx=5)
-
         # 미리보기
         ctk.CTkLabel(frame, text="데이터 미리보기:", anchor="w",
                      font=ctk.CTkFont(size=12)).pack(fill="x", pady=(15, 3))
-        self.preview_text = ctk.CTkTextbox(frame, height=250)
+        self.preview_text = ctk.CTkTextbox(frame, height=280)
         self.preview_text.pack(fill="both", expand=True)
 
         # 버튼
@@ -144,7 +135,7 @@ class IDAutomationApp(ctk.CTk):
         btn_frame.pack(fill="x", pady=(10, 0))
         ctk.CTkButton(btn_frame, text="미리보기", width=140,
                        command=self.preview_data).pack(side="left", padx=5)
-        ctk.CTkButton(btn_frame, text="복사 실행", width=140,
+        ctk.CTkButton(btn_frame, text="출석부 저장", width=140,
                        fg_color="#2e7d32", hover_color="#1b5e20",
                        command=self.copy_excel_data).pack(side="left", padx=5)
 
@@ -156,15 +147,6 @@ class IDAutomationApp(ctk.CTk):
             self.source_file = path
             self._set_entry(self.source_entry, os.path.basename(path))
             self.status_var.set(f"종합양식: {os.path.basename(path)}")
-
-    def select_target_file(self):
-        path = filedialog.askopenfilename(
-            title="출석부양식 파일 선택",
-            filetypes=[("Excel", "*.xlsx *.xls")])
-        if path:
-            self.target_file = path
-            self._set_entry(self.target_entry, os.path.basename(path))
-            self.status_var.set(f"출석부양식: {os.path.basename(path)}")
 
     def preview_data(self):
         if not self.source_file:
@@ -193,22 +175,18 @@ class IDAutomationApp(ctk.CTk):
         if not self.source_file:
             messagebox.showwarning("경고", "종합양식 파일을 먼저 선택하세요.")
             return
-        if not self.target_file:
-            messagebox.showwarning("경고", "출석부양식 파일을 먼저 선택하세요.")
-            return
         try:
-            result = self.excel_handler.copy_to_attendance(
-                self.source_file, self.target_file)
+            result = self.excel_handler.save_attendance(self.source_file)
             if result['success']:
                 messagebox.showinfo("완료",
-                    f"복사 완료!\n\n"
-                    f"복사된 인원: {result['count']}명\n"
+                    f"저장 완료!\n\n"
+                    f"인원: {result['count']}명\n"
                     f"저장 위치: {result['saved_path']}")
-                self.status_var.set(f"복사 완료: {result['count']}명")
+                self.status_var.set(f"출석부 저장 완료: {result['count']}명")
             else:
                 messagebox.showerror("오류", result['message'])
         except Exception as e:
-            messagebox.showerror("오류", f"복사 중 오류: {str(e)}")
+            messagebox.showerror("오류", f"저장 중 오류: {str(e)}")
 
     # ==================== 2. 마스킹 탭 ====================
     def setup_masking_tab(self):
