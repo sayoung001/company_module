@@ -1,0 +1,20 @@
+# 신분증 자동화 프로그램 의존성
+# pip install -r requirements.txt
+
+# GUI
+customtkinter>=5.2.0
+
+# Excel 처리
+openpyxl>=3.1.0
+pandas>=2.0.0
+
+# 이미지 처리 (Phase 2, 3)
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# OCR (Phase 4)
+requests>=2.31.0
+
+# exe 패키징
+pyinstaller>=6.0.0
