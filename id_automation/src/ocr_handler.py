@@ -96,8 +96,13 @@ class OCRHandler:
                 'Content-Type': 'application/json'
             }
 
+            # http → https 자동 변환 (Clova API는 HTTPS 필수)
+            api_url = self.api_url
+            if api_url.startswith('http://'):
+                api_url = api_url.replace('http://', 'https://', 1)
+
             response = requests.post(
-                self.api_url,
+                api_url,
                 headers=headers,
                 data=json.dumps(request_json),
                 timeout=30

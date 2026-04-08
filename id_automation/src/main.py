@@ -27,6 +27,15 @@ from pdf_handler import PDFHandler
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
 
+# 한글 폰트 설정 (Windows: 맑은 고딕)
+import platform
+if platform.system() == 'Windows':
+    FONT_FAMILY = "맑은 고딕"
+elif platform.system() == 'Darwin':
+    FONT_FAMILY = "AppleGothic"
+else:
+    FONT_FAMILY = None
+
 
 class IDAutomationApp(ctk.CTk):
     def __init__(self):
@@ -68,13 +77,13 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             title_frame,
             text="신분증 자동화 프로그램",
-            font=ctk.CTkFont(size=22, weight="bold")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=22, weight="bold")
         ).pack(side="left", padx=10)
 
         ctk.CTkLabel(
             title_frame,
             text="v2.0",
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color="gray"
         ).pack(side="left")
 
@@ -99,7 +108,7 @@ class IDAutomationApp(ctk.CTk):
         status_bar = ctk.CTkLabel(
             self.main_frame,
             textvariable=self.status_var,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             anchor="w"
         )
         status_bar.pack(fill="x", side="bottom", pady=(5, 0), padx=5)
@@ -112,7 +121,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="종합양식에서 출석부양식(A~I열)을 추출하여 저장합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 15))
 
         # 종합양식 파일 선택
@@ -126,7 +135,7 @@ class IDAutomationApp(ctk.CTk):
 
         # 미리보기
         ctk.CTkLabel(frame, text="데이터 미리보기:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(15, 3))
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(15, 3))
         self.preview_text = ctk.CTkTextbox(frame, height=280)
         self.preview_text.pack(fill="both", expand=True)
 
@@ -196,7 +205,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="신분증 이미지의 주민번호 뒷자리, 주소, 발급정보를 마스킹합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # 파일 선택
@@ -244,7 +253,7 @@ class IDAutomationApp(ctk.CTk):
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(8, 3))
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(8, 3))
         self.mask_log = ctk.CTkTextbox(frame, height=170)
         self.mask_log.pack(fill="both", expand=True)
 
@@ -352,7 +361,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="종합 스캔 이미지에서 개별 신분증을 분리하여 저장합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # 스캔 파일 선택
@@ -434,7 +443,7 @@ class IDAutomationApp(ctk.CTk):
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(8, 3))
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(8, 3))
         self.split_log = ctk.CTkTextbox(frame, height=150)
         self.split_log.pack(fill="both", expand=True)
 
@@ -675,7 +684,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="순번별 신분증이 종합양식 개인정보와 일치하는지 검증합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # 파일 선택
@@ -728,7 +737,7 @@ class IDAutomationApp(ctk.CTk):
         self.preview_left.pack(side="left", fill="both", expand=True, padx=(0, 5))
 
         ctk.CTkLabel(self.preview_left, text="신분증 이미지",
-                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=3)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold")).pack(pady=3)
         self.img_preview_label = ctk.CTkLabel(self.preview_left, text="",
                                                width=280, height=180)
         self.img_preview_label.pack(pady=5)
@@ -748,7 +757,7 @@ class IDAutomationApp(ctk.CTk):
         self.preview_right.pack(side="right", fill="both", expand=True, padx=(5, 0))
 
         ctk.CTkLabel(self.preview_right, text="종합양식 정보 대조",
-                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=3)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold")).pack(pady=3)
         self.verify_log = ctk.CTkTextbox(self.preview_right, height=180)
         self.verify_log.pack(fill="both", expand=True, pady=5)
 
@@ -995,7 +1004,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="퇴근 통합 PDF를 이수카드발급대장 + 출석부로 분리합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # PDF 파일 선택
@@ -1067,7 +1076,7 @@ class IDAutomationApp(ctk.CTk):
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(10, 3))
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(10, 3))
         self.pdf_log = ctk.CTkTextbox(frame, height=150)
         self.pdf_log.pack(fill="both", expand=True)
 
