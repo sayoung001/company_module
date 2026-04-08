@@ -280,6 +280,157 @@ class OCRHandler:
             'birth_match': False
         }
 
+    def get_mask_regions(self, image_path: str) -> dict:
+        """
+        OCR로 텍스트 위치를 감지하여 마스킹할 영역 좌표를 반환.
+        주민번호 뒷자리, 주소, 발급일/기관, 면허번호 등을 정밀 감지.
+
+        Returns:
+            dict: {
+                'success': bool,
+                'regions': [{'label': str, 'points': [(x,y),...]}],
+                'name': str,  # 감지된 이름
+                'card_type': str
+            }
+        """
+        ocr_result = self.extract_text(image_path)
+        if not ocr_result['success']:
+            return {'success': False, 'regions': [],
+                    'message': ocr_result['message']}
+
+        fields = ocr_result['fields']
+        if not fields:
+            return {'success': False, 'regions': [],
+                    'message': '텍스트를 인식하지 못했습니다.'}
+
+        mask_regions = []
+        detected_name = ''
+        card_type = '주민등록증'
+
+        # 모든 필드를 순회하며 민감 정보 식별
+        skip_indices = set()  # 이름 필드 인덱스 (마스킹 제외)
+
+        # 1단계: 카드 종류 판별 + 이름 찾기
+        for i, field in enumerate(fields):
+            text = field['text'].strip()
+            if '면허' in text or 'License' in text or 'Driver' in text:
+                card_type = '운전면허증'
+            if '외국' in text or '거소' in text or 'RESIDENT' in text:
+                card_type = '외국인등록증'
+
+        # 이름 찾기: "이름(한자)" 패턴 또는 이름 단독
+        for i, field in enumerate(fields):
+            text = field['text'].strip()
+            name_match = re.match(r'^([가-힣]{2,4})\s*[\(（]', text)
+            if name_match:
+                detected_name = name_match.group(1)
+                skip_indices.add(i)
+                break
+
+        if not detected_name:
+            for i, field in enumerate(fields):
+                text = field['text'].strip()
+                if re.match(r'^[가-힣]{2,4}$', text):
+                    # 일반적인 단어 제외
+                    exclude = {'주민등록증', '운전면허증', '전라북도', '경기도',
+                               '충청남도', '경상북도', '경상남도', '강원도',
+                               '서울특별시', '부산광역시', '대구광역시',
+                               '종보통', '종소형', '종대형'}
+                    if text not in exclude:
+                        detected_name = text
+                        skip_indices.add(i)
+                        break
+
+        # 2단계: 마스킹 대상 식별
+        for i, field in enumerate(fields):
+            if i in skip_indices:
+                continue
+
+            text = field['text'].strip()
+            bbox = self._get_bbox(field)
+            if not bbox:
+                continue
+
+            should_mask = False
+            label = ''
+
+            # 주민번호 (XXXXXX-XXXXXXX)
+            if re.search(r'\d{6}\s*[-–]\s*\d{7}', text):
+                # 전체 번호 마스킹 (뒷자리뿐 아니라 연결된 필드)
+                should_mask = True
+                label = '주민번호'
+
+            # 숫자 6자리-숫자 7자리가 분리되어 있을 수 있음
+            elif re.match(r'^\d{7}$', text):
+                # 주민번호 뒷자리 단독
+                should_mask = True
+                label = '주민번호 뒷자리'
+
+            # 면허번호 (XX-XX-XXXXXX-XX)
+            elif re.search(r'\d{2}-\d{2}-\d{6}-\d{2}', text):
+                should_mask = True
+                label = '면허번호'
+
+            # 주소 키워드
+            elif re.search(r'(도\s|시\s|군\s|구\s|동\s|읍\s|면\s|리\s|로\s|길\s|호\s|'
+                           r'아파트|빌라|오피스텔|층|동$|번지|번$)', text):
+                should_mask = True
+                label = '주소'
+
+            # 발급 관련
+            elif re.search(r'(발급|경찰|시장|구청|청장|도지사|군수)', text):
+                should_mask = True
+                label = '발급기관'
+
+            # 날짜 패턴 (발급일 등) - 이름 아래쪽에 있는 날짜
+            elif re.search(r'\d{4}\.\s*\d{1,2}\.\s*\d{1,2}', text):
+                should_mask = True
+                label = '날짜'
+
+            # 적성검사, 기간 등
+            elif re.search(r'(적성검사|기\s*간|갱신기간)', text):
+                should_mask = True
+                label = '발급정보'
+
+            # 코드류 (6FVFET, N8UUR6 등)
+            elif re.match(r'^[A-Z0-9]{5,}$', text):
+                should_mask = True
+                label = '코드'
+
+            # 전화번호
+            elif re.search(r'0\d{2}[-\s]?\d{3,4}[-\s]?\d{4}', text):
+                should_mask = True
+                label = '전화번호'
+
+            if should_mask:
+                mask_regions.append({
+                    'label': label,
+                    'text': text,
+                    'bbox': bbox
+                })
+
+        # "주민등록증", "1종보통" 등 타이틀은 마스킹하지 않음
+        return {
+            'success': True,
+            'regions': mask_regions,
+            'name': detected_name,
+            'card_type': card_type,
+            'total_fields': len(fields),
+            'masked_fields': len(mask_regions),
+            'message': (f'{card_type} / 이름: {detected_name} / '
+                       f'{len(mask_regions)}개 영역 마스킹')
+        }
+
+    def _get_bbox(self, field: dict) -> list:
+        """OCR 필드에서 바운딩 박스 좌표 추출 [(x,y), ...]"""
+        bp = field.get('bounding', {})
+        if not bp:
+            return None
+        vertices = bp.get('vertices', [])
+        if not vertices or len(vertices) < 4:
+            return None
+        return [(int(v.get('x', 0)), int(v.get('y', 0))) for v in vertices]
+
     def verify_batch(self, image_paths: list, excel_data: list) -> dict:
         """여러 신분증 일괄 검증"""
         results = []

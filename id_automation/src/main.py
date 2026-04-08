@@ -219,24 +219,42 @@ class IDAutomationApp(ctk.CTk):
                     "운전면허증", "외국인등록증"])
         card_type_menu.pack(side="left", padx=5)
 
-        ctk.CTkLabel(opt_frame, text="출력 폴더:", width=80, anchor="e").pack(side="left", padx=5)
-        self.mask_out_entry = ctk.CTkEntry(opt_frame, width=200)
+        # 출력 폴더
+        out_frame = ctk.CTkFrame(frame)
+        out_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(out_frame, text="출력 폴더:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mask_out_entry = ctk.CTkEntry(out_frame, width=350)
         self.mask_out_entry.pack(side="left", padx=5)
         self.mask_out_entry.insert(0, "output/마스킹")
-        ctk.CTkButton(opt_frame, text="변경", width=60,
+        ctk.CTkButton(out_frame, text="변경", width=60,
                        command=self.select_mask_output_dir).pack(side="left", padx=5)
+
+        # OCR API 설정
+        ocr_frame = ctk.CTkFrame(frame)
+        ocr_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(ocr_frame, text="Clova OCR URL:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mask_ocr_url = ctk.CTkEntry(ocr_frame, width=450)
+        self.mask_ocr_url.pack(side="left", padx=5)
+
+        key_frame2 = ctk.CTkFrame(frame)
+        key_frame2.pack(fill="x", pady=5)
+        ctk.CTkLabel(key_frame2, text="Secret Key:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mask_ocr_secret = ctk.CTkEntry(key_frame2, width=350, show="*")
+        self.mask_ocr_secret.pack(side="left", padx=5)
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(10, 3))
-        self.mask_log = ctk.CTkTextbox(frame, height=250)
+                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(8, 3))
+        self.mask_log = ctk.CTkTextbox(frame, height=170)
         self.mask_log.pack(fill="both", expand=True)
 
         # 버튼
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=(10, 0))
-        ctk.CTkButton(btn_frame, text="마스킹 실행", width=140,
+        btn_frame.pack(fill="x", pady=(8, 0))
+        ctk.CTkButton(btn_frame, text="OCR 정밀 마스킹", width=160,
                        fg_color="#2e7d32", hover_color="#1b5e20",
+                       command=self.run_ocr_masking).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="고정좌표 마스킹 (API 불필요)", width=200,
                        command=self.run_masking).pack(side="left", padx=5)
 
     def select_mask_files(self):
@@ -256,6 +274,36 @@ class IDAutomationApp(ctk.CTk):
         if path:
             self.mask_out_entry.delete(0, "end")
             self.mask_out_entry.insert(0, path)
+
+    def run_ocr_masking(self):
+        """OCR 기반 정밀 마스킹"""
+        if not self.id_files:
+            messagebox.showwarning("경고", "마스킹할 이미지를 선택하세요.")
+            return
+
+        api_url = self.mask_ocr_url.get().strip()
+        secret_key = self.mask_ocr_secret.get().strip()
+        if not api_url or not secret_key:
+            messagebox.showwarning("경고",
+                "OCR 정밀 마스킹에는 Clova OCR API가 필요합니다.\n"
+                "URL과 Secret Key를 입력하세요.")
+            return
+
+        output_dir = self.mask_out_entry.get()
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(os.path.dirname(self.id_files[0]), output_dir)
+
+        self.mask_log.delete("1.0", "end")
+        self.mask_log.insert("1.0", f"OCR 정밀 마스킹 시작... ({len(self.id_files)}개)\n\n")
+        self.status_var.set("OCR 마스킹 중...")
+
+        def do_mask():
+            ocr = OCRHandler(api_url=api_url, secret_key=secret_key)
+            result = self.image_handler.mask_batch_ocr(
+                self.id_files, output_dir, ocr)
+            self.after(0, lambda: self._show_mask_result(result))
+
+        threading.Thread(target=do_mask, daemon=True).start()
 
     def run_masking(self):
         if not self.id_files:
@@ -335,10 +383,10 @@ class IDAutomationApp(ctk.CTk):
         self.cols_entry.pack(side="left", padx=5)
         self.cols_entry.insert(0, "2")
 
-        ctk.CTkLabel(opt_frame, text="총 인원:", width=60, anchor="e").pack(side="left", padx=5)
-        self.total_entry = ctk.CTkEntry(opt_frame, width=40)
+        ctk.CTkLabel(opt_frame, text="인원:", width=50, anchor="e").pack(side="left", padx=5)
+        self.total_entry = ctk.CTkEntry(opt_frame, width=80,
+                                         placeholder_text="9 또는 5,4")
         self.total_entry.pack(side="left", padx=5)
-        self.total_entry.insert(0, "9")
 
         # 출력 폴더
         out_frame = ctk.CTkFrame(frame)
@@ -521,10 +569,17 @@ class IDAutomationApp(ctk.CTk):
             cols = int(self.cols_entry.get())
         except ValueError:
             cols = 2
+        # 인원수: "9" 또는 "5,4" (스캔 파일별 인원수)
+        total_text = self.total_entry.get().strip()
         try:
-            total_cards = int(self.total_entry.get())
+            if ',' in total_text:
+                total_cards_list = [int(x.strip()) for x in total_text.split(',')]
+            elif total_text:
+                total_cards_list = [int(total_text)]
+            else:
+                total_cards_list = [0]
         except ValueError:
-            total_cards = 0
+            total_cards_list = [0]
 
         output_dir = self.split_out_entry.get()
         if not os.path.isabs(output_dir):
@@ -533,7 +588,8 @@ class IDAutomationApp(ctk.CTk):
         do_mask = self.split_mask_var.get()
 
         self.split_log.delete("1.0", "end")
-        self.split_log.insert("1.0", "분리 처리 시작...\n\n")
+        self.split_log.insert("1.0",
+            f"분리 처리 시작... ({len(self.scan_files)}개 스캔 파일)\n\n")
         self.status_var.set("분리 처리 중...")
 
         # 순번 매칭 여부
@@ -551,13 +607,18 @@ class IDAutomationApp(ctk.CTk):
             all_results = []
             current_num = start_num
 
-            for scan_path in self.scan_files:
+            for file_idx, scan_path in enumerate(self.scan_files):
                 filename = os.path.basename(scan_path)
                 self.after(0, lambda f=filename:
                     self.split_log.insert("end", f"처리 중: {f}\n"))
 
+                # 파일별 인원수 (리스트에서 순서대로, 없으면 마지막 값 사용)
+                if file_idx < len(total_cards_list):
+                    total_cards = total_cards_list[file_idx]
+                else:
+                    total_cards = total_cards_list[-1] if total_cards_list else 0
+
                 if name_list and not do_mask:
-                    # 순번 매칭 분리
                     result = self.image_handler.split_with_name_order(
                         scan_path, output_dir, name_list, prefix,
                         cols, total_cards)

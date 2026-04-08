@@ -407,6 +407,83 @@ class ImageHandler:
             'message': f'총 {len(image_paths)}건 중 {success_count}건 마스킹 완료'
         }
 
+    # ==================== OCR 기반 정밀 마스킹 ====================
+
+    def mask_with_ocr(self, image_path: str, output_path: str,
+                      ocr_handler, mask_color=(255, 255, 255)) -> dict:
+        """
+        OCR로 텍스트 위치를 감지하여 민감 정보만 정밀 마스킹.
+        이름, 사진, 카드 타이틀은 보존.
+        """
+        try:
+            img = _imread(image_path)
+            if img is None:
+                return {'success': False, 'message': f'이미지를 열 수 없습니다: {image_path}'}
+
+            # OCR로 마스킹 영역 감지
+            ocr_result = ocr_handler.get_mask_regions(image_path)
+            if not ocr_result['success']:
+                # OCR 실패 시 고정좌표 폴백
+                return self.mask_id_card(image_path, output_path, 'auto', mask_color)
+
+            regions = ocr_result['regions']
+
+            # 각 영역을 흰색으로 마스킹
+            for region in regions:
+                bbox = region['bbox']  # [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
+                pts = np.array(bbox, dtype=np.int32)
+                # 마스킹 영역을 약간 확장 (여유)
+                margin = 5
+                pts_expanded = pts.copy()
+                center = pts.mean(axis=0)
+                for j in range(len(pts_expanded)):
+                    direction = pts_expanded[j] - center
+                    norm = np.linalg.norm(direction)
+                    if norm > 0:
+                        pts_expanded[j] = pts_expanded[j] + (direction / norm) * margin
+
+                cv2.fillPoly(img, [pts_expanded.astype(np.int32)], mask_color)
+
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            _imwrite(output_path, img)
+
+            return {
+                'success': True,
+                'card_type': ocr_result.get('card_type', ''),
+                'name': ocr_result.get('name', ''),
+                'masked_count': len(regions),
+                'masked_regions': [r['label'] for r in regions],
+                'message': ocr_result['message']
+            }
+
+        except Exception as e:
+            return {'success': False, 'message': f'OCR 마스킹 오류: {str(e)}'}
+
+    def mask_batch_ocr(self, image_paths: list, output_dir: str,
+                       ocr_handler, mask_color=(255, 255, 255)) -> dict:
+        """여러 신분증을 OCR 기반으로 일괄 마스킹"""
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        success_count = 0
+
+        for img_path in image_paths:
+            filename = Path(img_path).name
+            output_path = str(out_path / filename)
+            result = self.mask_with_ocr(img_path, output_path, ocr_handler, mask_color)
+            results.append({'file': filename, **result})
+            if result.get('success'):
+                success_count += 1
+
+        return {
+            'success': success_count > 0,
+            'total': len(image_paths),
+            'success_count': success_count,
+            'results': results,
+            'message': f'OCR 마스킹: 총 {len(image_paths)}건 중 {success_count}건 완료'
+        }
+
     def mask_combined_scan(self, scan_path: str, output_dir: str,
                            prefix: str = "주민", start_num: int = 1,
                            cols: int = 2, total_cards: int = 0,
