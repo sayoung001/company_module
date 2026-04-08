@@ -215,7 +215,7 @@ class IDAutomationApp(ctk.CTk):
         self.card_type_var = ctk.StringVar(value="auto (자동감지)")
         card_type_menu = ctk.CTkOptionMenu(
             opt_frame, variable=self.card_type_var, width=200,
-            values=["auto (자동감지)", "주민등록증_구형", "주민등록증_신형",
+            values=["auto (자동감지)", "주민등록증",
                     "운전면허증", "외국인등록증"])
         card_type_menu.pack(side="left", padx=5)
 
