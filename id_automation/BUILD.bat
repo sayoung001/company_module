@@ -2,7 +2,6 @@
 chcp 65001 >nul
 echo ========================================
 echo   ID Automation - BUILD EXE
-echo   (exe file builder)
 echo ========================================
 echo.
 
@@ -20,27 +19,33 @@ echo [3/4] Installing dependencies...
 pip install -r requirements.txt >nul 2>&1
 pip install pyinstaller >nul 2>&1
 
-echo [4/4] Building exe... (1-2 min)
+echo [4/4] Building exe... (2-3 min)
 cd src
-pyinstaller --onefile --windowed ^
+
+REM onedir: dist/ID_Automation/ folder with exe + all files
+pyinstaller --onedir --windowed ^
     --name "ID_Automation" ^
-    --add-data "../requirements.txt;." ^
     --hidden-import=openpyxl ^
     --hidden-import=numpy ^
     --hidden-import=cv2 ^
     --hidden-import=PIL ^
+    --hidden-import=PIL._tkinter_finder ^
     --hidden-import=PyPDF2 ^
     --hidden-import=requests ^
     --collect-all customtkinter ^
     main.py
 
 echo.
-if exist "dist\ID_Automation.exe" (
+if exist "dist\ID_Automation\ID_Automation.exe" (
     echo ========================================
     echo   BUILD SUCCESS!
-    echo   File: %cd%\dist\ID_Automation.exe
+    echo.
+    echo   Location: %cd%\dist\ID_Automation\
+    echo   Run: dist\ID_Automation\ID_Automation.exe
+    echo.
+    echo   To share: copy the entire
+    echo   "dist\ID_Automation" folder.
     echo ========================================
-    copy "dist\ID_Automation.exe" "..\..\" >nul 2>&1
 ) else (
     echo   BUILD FAILED! Check errors above.
 )
