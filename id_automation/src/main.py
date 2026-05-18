@@ -21,10 +21,20 @@ from PIL import Image, ImageTk
 from excel_handler import ExcelHandler
 from image_handler import ImageHandler
 from ocr_handler import OCRHandler
+from pdf_handler import PDFHandler
 
 # 테마 설정
 ctk.set_appearance_mode("light")
 ctk.set_default_color_theme("blue")
+
+# 한글 폰트 설정 (Windows: 맑은 고딕)
+import platform
+if platform.system() == 'Windows':
+    FONT_FAMILY = "맑은 고딕"
+elif platform.system() == 'Darwin':
+    FONT_FAMILY = "AppleGothic"
+else:
+    FONT_FAMILY = None
 
 
 class IDAutomationApp(ctk.CTk):
@@ -50,6 +60,7 @@ class IDAutomationApp(ctk.CTk):
         self.excel_handler = ExcelHandler()
         self.image_handler = ImageHandler()
         self.ocr_handler = OCRHandler()
+        self.pdf_handler = PDFHandler()
 
         # UI 구성
         self.create_widgets()
@@ -66,13 +77,13 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             title_frame,
             text="신분증 자동화 프로그램",
-            font=ctk.CTkFont(size=22, weight="bold")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=22, weight="bold")
         ).pack(side="left", padx=10)
 
         ctk.CTkLabel(
             title_frame,
             text="v2.0",
-            font=ctk.CTkFont(size=14),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color="gray"
         ).pack(side="left")
 
@@ -84,18 +95,20 @@ class IDAutomationApp(ctk.CTk):
         self.tab_masking = self.tabview.add("2. 마스킹")
         self.tab_split = self.tabview.add("3. 분리저장")
         self.tab_verify = self.tabview.add("4. 검증")
+        self.tab_pdf = self.tabview.add("5. PDF 분리")
 
         self.setup_excel_tab()
         self.setup_masking_tab()
         self.setup_split_tab()
         self.setup_verify_tab()
+        self.setup_pdf_tab()
 
         # 상태바
         self.status_var = ctk.StringVar(value="준비됨")
         status_bar = ctk.CTkLabel(
             self.main_frame,
             textvariable=self.status_var,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             anchor="w"
         )
         status_bar.pack(fill="x", side="bottom", pady=(5, 0), padx=5)
@@ -107,8 +120,8 @@ class IDAutomationApp(ctk.CTk):
 
         ctk.CTkLabel(
             frame,
-            text="종합양식의 데이터를 출석부양식으로 자동 복사합니다.",
-            font=ctk.CTkFont(size=13)
+            text="종합양식에서 출석부양식(A~I열)을 추출하여 저장합니다.",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 15))
 
         # 종합양식 파일 선택
@@ -120,19 +133,10 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkButton(src_frame, text="찾아보기", width=90,
                        command=self.select_source_file).pack(side="left", padx=5)
 
-        # 출석부양식 파일 선택
-        tgt_frame = ctk.CTkFrame(frame)
-        tgt_frame.pack(fill="x", pady=5)
-        ctk.CTkLabel(tgt_frame, text="출석부양식:", width=90, anchor="e").pack(side="left", padx=5)
-        self.target_entry = ctk.CTkEntry(tgt_frame, width=450, state="readonly")
-        self.target_entry.pack(side="left", padx=5)
-        ctk.CTkButton(tgt_frame, text="찾아보기", width=90,
-                       command=self.select_target_file).pack(side="left", padx=5)
-
         # 미리보기
         ctk.CTkLabel(frame, text="데이터 미리보기:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(15, 3))
-        self.preview_text = ctk.CTkTextbox(frame, height=250)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(15, 3))
+        self.preview_text = ctk.CTkTextbox(frame, height=280)
         self.preview_text.pack(fill="both", expand=True)
 
         # 버튼
@@ -140,7 +144,7 @@ class IDAutomationApp(ctk.CTk):
         btn_frame.pack(fill="x", pady=(10, 0))
         ctk.CTkButton(btn_frame, text="미리보기", width=140,
                        command=self.preview_data).pack(side="left", padx=5)
-        ctk.CTkButton(btn_frame, text="복사 실행", width=140,
+        ctk.CTkButton(btn_frame, text="출석부 저장", width=140,
                        fg_color="#2e7d32", hover_color="#1b5e20",
                        command=self.copy_excel_data).pack(side="left", padx=5)
 
@@ -152,15 +156,6 @@ class IDAutomationApp(ctk.CTk):
             self.source_file = path
             self._set_entry(self.source_entry, os.path.basename(path))
             self.status_var.set(f"종합양식: {os.path.basename(path)}")
-
-    def select_target_file(self):
-        path = filedialog.askopenfilename(
-            title="출석부양식 파일 선택",
-            filetypes=[("Excel", "*.xlsx *.xls")])
-        if path:
-            self.target_file = path
-            self._set_entry(self.target_entry, os.path.basename(path))
-            self.status_var.set(f"출석부양식: {os.path.basename(path)}")
 
     def preview_data(self):
         if not self.source_file:
@@ -189,22 +184,18 @@ class IDAutomationApp(ctk.CTk):
         if not self.source_file:
             messagebox.showwarning("경고", "종합양식 파일을 먼저 선택하세요.")
             return
-        if not self.target_file:
-            messagebox.showwarning("경고", "출석부양식 파일을 먼저 선택하세요.")
-            return
         try:
-            result = self.excel_handler.copy_to_attendance(
-                self.source_file, self.target_file)
+            result = self.excel_handler.save_attendance(self.source_file)
             if result['success']:
                 messagebox.showinfo("완료",
-                    f"복사 완료!\n\n"
-                    f"복사된 인원: {result['count']}명\n"
+                    f"저장 완료!\n\n"
+                    f"인원: {result['count']}명\n"
                     f"저장 위치: {result['saved_path']}")
-                self.status_var.set(f"복사 완료: {result['count']}명")
+                self.status_var.set(f"출석부 저장 완료: {result['count']}명")
             else:
                 messagebox.showerror("오류", result['message'])
         except Exception as e:
-            messagebox.showerror("오류", f"복사 중 오류: {str(e)}")
+            messagebox.showerror("오류", f"저장 중 오류: {str(e)}")
 
     # ==================== 2. 마스킹 탭 ====================
     def setup_masking_tab(self):
@@ -214,7 +205,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="신분증 이미지의 주민번호 뒷자리, 주소, 발급정보를 마스킹합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # 파일 선택
@@ -233,28 +224,46 @@ class IDAutomationApp(ctk.CTk):
         self.card_type_var = ctk.StringVar(value="auto (자동감지)")
         card_type_menu = ctk.CTkOptionMenu(
             opt_frame, variable=self.card_type_var, width=200,
-            values=["auto (자동감지)", "주민등록증_구형", "주민등록증_신형",
+            values=["auto (자동감지)", "주민등록증",
                     "운전면허증", "외국인등록증"])
         card_type_menu.pack(side="left", padx=5)
 
-        ctk.CTkLabel(opt_frame, text="출력 폴더:", width=80, anchor="e").pack(side="left", padx=5)
-        self.mask_out_entry = ctk.CTkEntry(opt_frame, width=200)
+        # 출력 폴더
+        out_frame = ctk.CTkFrame(frame)
+        out_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(out_frame, text="출력 폴더:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mask_out_entry = ctk.CTkEntry(out_frame, width=350)
         self.mask_out_entry.pack(side="left", padx=5)
         self.mask_out_entry.insert(0, "output/마스킹")
-        ctk.CTkButton(opt_frame, text="변경", width=60,
+        ctk.CTkButton(out_frame, text="변경", width=60,
                        command=self.select_mask_output_dir).pack(side="left", padx=5)
+
+        # OCR API 설정
+        ocr_frame = ctk.CTkFrame(frame)
+        ocr_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(ocr_frame, text="Clova OCR URL:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mask_ocr_url = ctk.CTkEntry(ocr_frame, width=450)
+        self.mask_ocr_url.pack(side="left", padx=5)
+
+        key_frame2 = ctk.CTkFrame(frame)
+        key_frame2.pack(fill="x", pady=5)
+        ctk.CTkLabel(key_frame2, text="Secret Key:", width=100, anchor="e").pack(side="left", padx=5)
+        self.mask_ocr_secret = ctk.CTkEntry(key_frame2, width=350, show="*")
+        self.mask_ocr_secret.pack(side="left", padx=5)
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(10, 3))
-        self.mask_log = ctk.CTkTextbox(frame, height=250)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(8, 3))
+        self.mask_log = ctk.CTkTextbox(frame, height=170)
         self.mask_log.pack(fill="both", expand=True)
 
         # 버튼
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        btn_frame.pack(fill="x", pady=(10, 0))
-        ctk.CTkButton(btn_frame, text="마스킹 실행", width=140,
+        btn_frame.pack(fill="x", pady=(8, 0))
+        ctk.CTkButton(btn_frame, text="OCR 정밀 마스킹", width=160,
                        fg_color="#2e7d32", hover_color="#1b5e20",
+                       command=self.run_ocr_masking).pack(side="left", padx=5)
+        ctk.CTkButton(btn_frame, text="고정좌표 마스킹 (API 불필요)", width=200,
                        command=self.run_masking).pack(side="left", padx=5)
 
     def select_mask_files(self):
@@ -274,6 +283,36 @@ class IDAutomationApp(ctk.CTk):
         if path:
             self.mask_out_entry.delete(0, "end")
             self.mask_out_entry.insert(0, path)
+
+    def run_ocr_masking(self):
+        """OCR 기반 정밀 마스킹"""
+        if not self.id_files:
+            messagebox.showwarning("경고", "마스킹할 이미지를 선택하세요.")
+            return
+
+        api_url = self.mask_ocr_url.get().strip()
+        secret_key = self.mask_ocr_secret.get().strip()
+        if not api_url or not secret_key:
+            messagebox.showwarning("경고",
+                "OCR 정밀 마스킹에는 Clova OCR API가 필요합니다.\n"
+                "URL과 Secret Key를 입력하세요.")
+            return
+
+        output_dir = self.mask_out_entry.get()
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(os.path.dirname(self.id_files[0]), output_dir)
+
+        self.mask_log.delete("1.0", "end")
+        self.mask_log.insert("1.0", f"OCR 정밀 마스킹 시작... ({len(self.id_files)}개)\n\n")
+        self.status_var.set("OCR 마스킹 중...")
+
+        def do_mask():
+            ocr = OCRHandler(api_url=api_url, secret_key=secret_key)
+            result = self.image_handler.mask_batch_ocr(
+                self.id_files, output_dir, ocr)
+            self.after(0, lambda: self._show_mask_result(result))
+
+        threading.Thread(target=do_mask, daemon=True).start()
 
     def run_masking(self):
         if not self.id_files:
@@ -322,7 +361,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="종합 스캔 이미지에서 개별 신분증을 분리하여 저장합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # 스캔 파일 선택
@@ -353,10 +392,10 @@ class IDAutomationApp(ctk.CTk):
         self.cols_entry.pack(side="left", padx=5)
         self.cols_entry.insert(0, "2")
 
-        ctk.CTkLabel(opt_frame, text="총 인원:", width=60, anchor="e").pack(side="left", padx=5)
-        self.total_entry = ctk.CTkEntry(opt_frame, width=40)
+        ctk.CTkLabel(opt_frame, text="인원:", width=50, anchor="e").pack(side="left", padx=5)
+        self.total_entry = ctk.CTkEntry(opt_frame, width=80,
+                                         placeholder_text="9 또는 5,4")
         self.total_entry.pack(side="left", padx=5)
-        self.total_entry.insert(0, "9")
 
         # 출력 폴더
         out_frame = ctk.CTkFrame(frame)
@@ -404,7 +443,7 @@ class IDAutomationApp(ctk.CTk):
 
         # 결과 로그
         ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
-                     font=ctk.CTkFont(size=12)).pack(fill="x", pady=(8, 3))
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(8, 3))
         self.split_log = ctk.CTkTextbox(frame, height=150)
         self.split_log.pack(fill="both", expand=True)
 
@@ -539,10 +578,17 @@ class IDAutomationApp(ctk.CTk):
             cols = int(self.cols_entry.get())
         except ValueError:
             cols = 2
+        # 인원수: "9" 또는 "5,4" (스캔 파일별 인원수)
+        total_text = self.total_entry.get().strip()
         try:
-            total_cards = int(self.total_entry.get())
+            if ',' in total_text:
+                total_cards_list = [int(x.strip()) for x in total_text.split(',')]
+            elif total_text:
+                total_cards_list = [int(total_text)]
+            else:
+                total_cards_list = [0]
         except ValueError:
-            total_cards = 0
+            total_cards_list = [0]
 
         output_dir = self.split_out_entry.get()
         if not os.path.isabs(output_dir):
@@ -551,7 +597,8 @@ class IDAutomationApp(ctk.CTk):
         do_mask = self.split_mask_var.get()
 
         self.split_log.delete("1.0", "end")
-        self.split_log.insert("1.0", "분리 처리 시작...\n\n")
+        self.split_log.insert("1.0",
+            f"분리 처리 시작... ({len(self.scan_files)}개 스캔 파일)\n\n")
         self.status_var.set("분리 처리 중...")
 
         # 순번 매칭 여부
@@ -569,13 +616,18 @@ class IDAutomationApp(ctk.CTk):
             all_results = []
             current_num = start_num
 
-            for scan_path in self.scan_files:
+            for file_idx, scan_path in enumerate(self.scan_files):
                 filename = os.path.basename(scan_path)
                 self.after(0, lambda f=filename:
                     self.split_log.insert("end", f"처리 중: {f}\n"))
 
+                # 파일별 인원수 (리스트에서 순서대로, 없으면 마지막 값 사용)
+                if file_idx < len(total_cards_list):
+                    total_cards = total_cards_list[file_idx]
+                else:
+                    total_cards = total_cards_list[-1] if total_cards_list else 0
+
                 if name_list and not do_mask:
-                    # 순번 매칭 분리
                     result = self.image_handler.split_with_name_order(
                         scan_path, output_dir, name_list, prefix,
                         cols, total_cards)
@@ -632,7 +684,7 @@ class IDAutomationApp(ctk.CTk):
         ctk.CTkLabel(
             frame,
             text="순번별 신분증이 종합양식 개인정보와 일치하는지 검증합니다.",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
         ).pack(pady=(0, 10))
 
         # 파일 선택
@@ -685,7 +737,7 @@ class IDAutomationApp(ctk.CTk):
         self.preview_left.pack(side="left", fill="both", expand=True, padx=(0, 5))
 
         ctk.CTkLabel(self.preview_left, text="신분증 이미지",
-                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=3)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold")).pack(pady=3)
         self.img_preview_label = ctk.CTkLabel(self.preview_left, text="",
                                                width=280, height=180)
         self.img_preview_label.pack(pady=5)
@@ -705,7 +757,7 @@ class IDAutomationApp(ctk.CTk):
         self.preview_right.pack(side="right", fill="both", expand=True, padx=(5, 0))
 
         ctk.CTkLabel(self.preview_right, text="종합양식 정보 대조",
-                     font=ctk.CTkFont(size=12, weight="bold")).pack(pady=3)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold")).pack(pady=3)
         self.verify_log = ctk.CTkTextbox(self.preview_right, height=180)
         self.verify_log.pack(fill="both", expand=True, pady=5)
 
@@ -943,6 +995,190 @@ class IDAutomationApp(ctk.CTk):
 
         self.status_var.set(result['message'])
         messagebox.showinfo("검증 완료", result['message'])
+
+    # ==================== 5. PDF 분리 탭 ====================
+    def setup_pdf_tab(self):
+        frame = ctk.CTkFrame(self.tab_pdf, fg_color="transparent")
+        frame.pack(fill="both", expand=True, padx=15, pady=15)
+
+        ctk.CTkLabel(
+            frame,
+            text="퇴근 통합 PDF를 이수카드발급대장 + 출석부로 분리합니다.",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13)
+        ).pack(pady=(0, 10))
+
+        # PDF 파일 선택
+        pdf_frame = ctk.CTkFrame(frame)
+        pdf_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(pdf_frame, text="통합 PDF:", width=100, anchor="e").pack(side="left", padx=5)
+        self.pdf_entry = ctk.CTkEntry(pdf_frame, width=400, state="readonly")
+        self.pdf_entry.pack(side="left", padx=5)
+        ctk.CTkButton(pdf_frame, text="파일 선택", width=90,
+                       command=self.select_pdf_file).pack(side="left", padx=5)
+
+        # 종합양식 (인원수 자동 추출)
+        excel_frame = ctk.CTkFrame(frame)
+        excel_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(excel_frame, text="종합양식:", width=100, anchor="e").pack(side="left", padx=5)
+        self.pdf_excel_entry = ctk.CTkEntry(excel_frame, width=400, state="readonly")
+        self.pdf_excel_entry.pack(side="left", padx=5)
+        ctk.CTkButton(excel_frame, text="파일 선택", width=90,
+                       command=self.select_pdf_excel).pack(side="left", padx=5)
+
+        # 옵션
+        opt_frame = ctk.CTkFrame(frame)
+        opt_frame.pack(fill="x", pady=5)
+
+        ctk.CTkLabel(opt_frame, text="날짜:", width=100, anchor="e").pack(side="left", padx=5)
+        self.pdf_date_entry = ctk.CTkEntry(opt_frame, width=100,
+                                            placeholder_text="자동추출")
+        self.pdf_date_entry.pack(side="left", padx=5)
+
+        ctk.CTkLabel(opt_frame, text="시간대:", width=55, anchor="e").pack(side="left", padx=5)
+        self.pdf_session_var = ctk.StringVar(value="오후")
+        ctk.CTkOptionMenu(opt_frame, variable=self.pdf_session_var, width=80,
+                          values=["오전", "오후"]).pack(side="left", padx=5)
+
+        ctk.CTkLabel(opt_frame, text="인원:", width=45, anchor="e").pack(side="left", padx=5)
+        self.pdf_count_entry = ctk.CTkEntry(opt_frame, width=50,
+                                             placeholder_text="자동")
+        self.pdf_count_entry.pack(side="left", padx=5)
+
+        # 페이지 분배
+        page_frame = ctk.CTkFrame(frame)
+        page_frame.pack(fill="x", pady=5)
+
+        ctk.CTkLabel(page_frame, text="이수카드:", width=100, anchor="e").pack(side="left", padx=5)
+        self.pdf_card_pages_entry = ctk.CTkEntry(page_frame, width=50,
+                                                   placeholder_text="자동")
+        self.pdf_card_pages_entry.pack(side="left", padx=5)
+        ctk.CTkLabel(page_frame, text="페이지").pack(side="left", padx=2)
+
+        ctk.CTkLabel(page_frame, text="출석부:", width=65, anchor="e").pack(side="left", padx=5)
+        self.pdf_attend_pages_entry = ctk.CTkEntry(page_frame, width=50,
+                                                     placeholder_text="자동")
+        self.pdf_attend_pages_entry.pack(side="left", padx=2)
+        ctk.CTkLabel(page_frame, text="페이지").pack(side="left", padx=2)
+
+        self.pdf_total_label = ctk.CTkLabel(page_frame, text="(총 ? 페이지)",
+                                             text_color="gray")
+        self.pdf_total_label.pack(side="left", padx=10)
+
+        # 출력 폴더
+        out_frame = ctk.CTkFrame(frame)
+        out_frame.pack(fill="x", pady=5)
+        ctk.CTkLabel(out_frame, text="출력 폴더:", width=100, anchor="e").pack(side="left", padx=5)
+        self.pdf_out_entry = ctk.CTkEntry(out_frame, width=400)
+        self.pdf_out_entry.pack(side="left", padx=5)
+        self.pdf_out_entry.insert(0, "output/PDF")
+        ctk.CTkButton(out_frame, text="변경", width=60,
+                       command=self.select_pdf_output_dir).pack(side="left", padx=5)
+
+        # 결과 로그
+        ctk.CTkLabel(frame, text="처리 결과:", anchor="w",
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x", pady=(10, 3))
+        self.pdf_log = ctk.CTkTextbox(frame, height=150)
+        self.pdf_log.pack(fill="both", expand=True)
+
+        # 버튼
+        btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        btn_frame.pack(fill="x", pady=(10, 0))
+        ctk.CTkButton(btn_frame, text="PDF 분리 실행", width=160,
+                       fg_color="#2e7d32", hover_color="#1b5e20",
+                       command=self.run_pdf_split).pack(side="left", padx=5)
+
+        # 상태 변수
+        self.pdf_file_path = None
+        self.pdf_excel_path = None
+
+    def select_pdf_file(self):
+        path = filedialog.askopenfilename(
+            title="통합 PDF 파일 선택",
+            filetypes=[("PDF", "*.pdf")])
+        if path:
+            self.pdf_file_path = path
+            self._set_entry(self.pdf_entry, os.path.basename(path))
+
+            # PDF 페이지 수 표시
+            info = self.pdf_handler.analyze_pdf(path)
+            if info['success']:
+                self.pdf_total_label.configure(
+                    text=f"(총 {info['total_pages']} 페이지)")
+            self.status_var.set(f"PDF: {os.path.basename(path)} ({info.get('total_pages', '?')}p)")
+
+    def select_pdf_excel(self):
+        path = filedialog.askopenfilename(
+            title="종합양식 파일 선택 (인원수 추출용)",
+            filetypes=[("Excel", "*.xlsx *.xls")])
+        if path:
+            self.pdf_excel_path = path
+            self._set_entry(self.pdf_excel_entry, os.path.basename(path))
+
+            # 인원수 자동 추출
+            try:
+                data = self.excel_handler.read_source_data(path)
+                self.pdf_count_entry.delete(0, "end")
+                self.pdf_count_entry.insert(0, str(len(data)))
+                self.status_var.set(f"종합양식: {len(data)}명")
+            except Exception:
+                pass
+
+    def select_pdf_output_dir(self):
+        path = filedialog.askdirectory(title="PDF 출력 폴더 선택")
+        if path:
+            self.pdf_out_entry.delete(0, "end")
+            self.pdf_out_entry.insert(0, path)
+
+    def run_pdf_split(self):
+        if not self.pdf_file_path:
+            messagebox.showwarning("경고", "통합 PDF 파일을 선택하세요.")
+            return
+
+        date_str = self.pdf_date_entry.get().strip()
+        session = self.pdf_session_var.get()
+
+        try:
+            person_count = int(self.pdf_count_entry.get())
+        except (ValueError, TypeError):
+            person_count = 0
+
+        try:
+            card_pages = int(self.pdf_card_pages_entry.get())
+        except (ValueError, TypeError):
+            card_pages = 0
+
+        try:
+            attend_pages = int(self.pdf_attend_pages_entry.get())
+        except (ValueError, TypeError):
+            attend_pages = 0
+
+        output_dir = self.pdf_out_entry.get()
+        if not os.path.isabs(output_dir):
+            output_dir = os.path.join(
+                os.path.dirname(self.pdf_file_path), output_dir)
+
+        self.pdf_log.delete("1.0", "end")
+        self.pdf_log.insert("1.0", "PDF 분리 시작...\n\n")
+
+        result = self.pdf_handler.split_combined_pdf(
+            self.pdf_file_path, output_dir, date_str, person_count,
+            session, card_pages, attend_pages)
+
+        self.pdf_log.delete("1.0", "end")
+        if result['success']:
+            self.pdf_log.insert("1.0", f"{result['message']}\n\n")
+            self.pdf_log.insert("end", "생성된 파일:\n")
+            for f in result.get('files', []):
+                self.pdf_log.insert("end", f"  {os.path.basename(f)}\n")
+            self.pdf_log.insert("end",
+                f"\n이수카드발급대장: {result.get('card_pages', '?')}페이지\n"
+                f"출석부: {result.get('attend_pages', '?')}페이지\n")
+            messagebox.showinfo("완료", result['message'])
+        else:
+            self.pdf_log.insert("1.0", f"오류: {result['message']}\n")
+            messagebox.showerror("오류", result['message'])
+
+        self.status_var.set(result['message'])
 
     # ==================== 유틸리티 ====================
     def _set_entry(self, entry, text):

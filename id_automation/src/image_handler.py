@@ -11,38 +11,52 @@ from pathlib import Path
 from datetime import datetime
 
 
+def _imread(path: str) -> np.ndarray:
+    """한글 경로 지원 이미지 읽기 (Windows 호환)"""
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    return img
+
+
+def _imwrite(path: str, img: np.ndarray,
+             params=None) -> bool:
+    """한글 경로 지원 이미지 저장 (Windows 호환)"""
+    if params is None:
+        params = [cv2.IMWRITE_JPEG_QUALITY, 95]
+    ext = Path(path).suffix.lower()
+    result, encoded = cv2.imencode(ext, img, params)
+    if result:
+        encoded.tofile(path)
+    return result
+
+
 class ImageHandler:
     # 한국 신분증 표준 비율 (가로:세로)
     ID_ASPECT_RATIO = 1.58  # 85.6mm x 53.98mm
 
     # 신분증 종류별 마스킹 영역 (상대 좌표: x%, y%, w%, h%)
+    # 방침: 이름+사진만 남기고 나머지(번호/주소/발급)는 전부 마스킹
     MASK_REGIONS = {
-        '주민등록증_구형': {
-            'name': '주민등록증(구형)',
+        '주민등록증': {
+            'name': '주민등록증',
+            # 주민등록증: 사진 우측(~65%), 텍스트 좌측(~65%)
+            # 이름(~25%) 아래 전부 마스킹, 사진 영역은 보존
             'regions': [
-                {'label': '주민번호 뒷자리', 'x': 0.23, 'y': 0.27, 'w': 0.18, 'h': 0.06},
-                {'label': '주소+발급', 'x': 0.03, 'y': 0.33, 'w': 0.62, 'h': 0.64},
-            ]
-        },
-        '주민등록증_신형': {
-            'name': '주민등록증(신형)',
-            'regions': [
-                {'label': '주민번호 뒷자리', 'x': 0.23, 'y': 0.27, 'w': 0.18, 'h': 0.06},
-                {'label': '주소+발급', 'x': 0.03, 'y': 0.33, 'w': 0.62, 'h': 0.64},
+                {'label': '번호+주소+발급', 'x': 0.01, 'y': 0.28, 'w': 0.65, 'h': 0.71},
             ]
         },
         '운전면허증': {
             'name': '운전면허증',
+            # 운전면허증: 사진 좌측(~13%), 텍스트 중앙~우측
+            # 면허번호 + 이름 아래 전부. 우측 끝(도장/코드)까지 포함
             'regions': [
-                {'label': '면허번호', 'x': 0.13, 'y': 0.07, 'w': 0.67, 'h': 0.14},
-                {'label': '주민번호+주소+발급', 'x': 0.13, 'y': 0.23, 'w': 0.67, 'h': 0.74},
+                {'label': '면허번호', 'x': 0.08, 'y': 0.03, 'w': 0.85, 'h': 0.16},
+                {'label': '번호+주소+발급', 'x': 0.08, 'y': 0.24, 'w': 0.85, 'h': 0.75},
             ]
         },
         '외국인등록증': {
             'name': '외국인등록증/거소신고증',
             'regions': [
-                {'label': '등록번호 뒷자리', 'x': 0.35, 'y': 0.12, 'w': 0.25, 'h': 0.10},
-                {'label': '주소+발급', 'x': 0.03, 'y': 0.45, 'w': 0.58, 'h': 0.50},
+                {'label': '번호+주소+발급', 'x': 0.01, 'y': 0.26, 'w': 0.60, 'h': 0.72},
             ]
         },
     }
@@ -68,7 +82,7 @@ class ImageHandler:
             total_cards: 총 카드 수 (0이면 자동 감지)
         """
         try:
-            img = cv2.imread(scan_path)
+            img = _imread(scan_path)
             if img is None:
                 return {'success': False, 'count': 0, 'files': [],
                         'message': f'이미지를 열 수 없습니다: {scan_path}'}
@@ -119,7 +133,7 @@ class ImageHandler:
                     num = start_num + card_idx
                     filename = f"{prefix}-{num}.jpg"
                     filepath = str(out_path / filename)
-                    cv2.imwrite(filepath, card_img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    _imwrite(filepath, card_img)
                     saved_files.append(filepath)
                     card_idx += 1
 
@@ -324,7 +338,7 @@ class ImageHandler:
                      mask_color: tuple = (255, 255, 255)) -> dict:
         """개별 신분증 이미지를 마스킹"""
         try:
-            img = cv2.imread(image_path)
+            img = _imread(image_path)
             if img is None:
                 return {'success': False, 'card_type': '', 'masked_regions': [],
                         'message': f'이미지를 열 수 없습니다: {image_path}'}
@@ -350,7 +364,7 @@ class ImageHandler:
                 masked_regions.append(region['label'])
 
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(output_path, img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            _imwrite(output_path, img)
 
             type_name = self.MASK_REGIONS[card_type]['name']
             return {
@@ -389,6 +403,83 @@ class ImageHandler:
             'fail_count': len(image_paths) - success_count,
             'results': results,
             'message': f'총 {len(image_paths)}건 중 {success_count}건 마스킹 완료'
+        }
+
+    # ==================== OCR 기반 정밀 마스킹 ====================
+
+    def mask_with_ocr(self, image_path: str, output_path: str,
+                      ocr_handler, mask_color=(255, 255, 255)) -> dict:
+        """
+        OCR로 텍스트 위치를 감지하여 민감 정보만 정밀 마스킹.
+        이름, 사진, 카드 타이틀은 보존.
+        """
+        try:
+            img = _imread(image_path)
+            if img is None:
+                return {'success': False, 'message': f'이미지를 열 수 없습니다: {image_path}'}
+
+            # OCR로 마스킹 영역 감지
+            ocr_result = ocr_handler.get_mask_regions(image_path)
+            if not ocr_result['success']:
+                # OCR 실패 시 고정좌표 폴백
+                return self.mask_id_card(image_path, output_path, 'auto', mask_color)
+
+            regions = ocr_result['regions']
+
+            # 각 영역을 흰색으로 마스킹
+            for region in regions:
+                bbox = region['bbox']  # [(x1,y1), (x2,y2), (x3,y3), (x4,y4)]
+                pts = np.array(bbox, dtype=np.int32)
+                # 마스킹 영역을 약간 확장 (여유)
+                margin = 5
+                pts_expanded = pts.copy()
+                center = pts.mean(axis=0)
+                for j in range(len(pts_expanded)):
+                    direction = pts_expanded[j] - center
+                    norm = np.linalg.norm(direction)
+                    if norm > 0:
+                        pts_expanded[j] = pts_expanded[j] + (direction / norm) * margin
+
+                cv2.fillPoly(img, [pts_expanded.astype(np.int32)], mask_color)
+
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            _imwrite(output_path, img)
+
+            return {
+                'success': True,
+                'card_type': ocr_result.get('card_type', ''),
+                'name': ocr_result.get('name', ''),
+                'masked_count': len(regions),
+                'masked_regions': [r['label'] for r in regions],
+                'message': ocr_result['message']
+            }
+
+        except Exception as e:
+            return {'success': False, 'message': f'OCR 마스킹 오류: {str(e)}'}
+
+    def mask_batch_ocr(self, image_paths: list, output_dir: str,
+                       ocr_handler, mask_color=(255, 255, 255)) -> dict:
+        """여러 신분증을 OCR 기반으로 일괄 마스킹"""
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        results = []
+        success_count = 0
+
+        for img_path in image_paths:
+            filename = Path(img_path).name
+            output_path = str(out_path / filename)
+            result = self.mask_with_ocr(img_path, output_path, ocr_handler, mask_color)
+            results.append({'file': filename, **result})
+            if result.get('success'):
+                success_count += 1
+
+        return {
+            'success': success_count > 0,
+            'total': len(image_paths),
+            'success_count': success_count,
+            'results': results,
+            'message': f'OCR 마스킹: 총 {len(image_paths)}건 중 {success_count}건 완료'
         }
 
     def mask_combined_scan(self, scan_path: str, output_dir: str,
@@ -450,16 +541,8 @@ class ImageHandler:
         if blue_ratio > 0.18 and green_ratio > 0.08 and tr_sat < 30:
             return '운전면허증'
 
-        # 3) 주민등록증 구형/신형 구분
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        top_left = gray[:int(h * 0.25), :int(w * 0.5)]
-        _, binary = cv2.threshold(top_left, 100, 255, cv2.THRESH_BINARY_INV)
-        text_ratio = np.sum(binary > 0) / binary.size
-
-        if text_ratio > 0.15:
-            return '주민등록증_구형'
-
-        return '주민등록증_신형'
+        # 3) 기본: 주민등록증
+        return '주민등록증'
 
     # ==================== 모바일 신분증 추출/삽입 ====================
 
@@ -477,7 +560,7 @@ class ImageHandler:
             dict: {'success': bool, 'image': np.ndarray, 'message': str}
         """
         try:
-            img = cv2.imread(photo_path)
+            img = _imread(photo_path)
             if img is None:
                 return {'success': False, 'image': None,
                         'message': f'이미지를 열 수 없습니다: {photo_path}'}
@@ -489,7 +572,7 @@ class ImageHandler:
 
             if output_path:
                 Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-                cv2.imwrite(output_path, card, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                _imwrite(output_path, card)
 
             return {
                 'success': True,
@@ -636,7 +719,7 @@ class ImageHandler:
             dict: {'success': bool, 'message': str}
         """
         try:
-            scan = cv2.imread(scan_path)
+            scan = _imread(scan_path)
             if scan is None:
                 return {'success': False,
                         'message': f'스캔 이미지를 열 수 없습니다: {scan_path}'}
@@ -681,7 +764,7 @@ class ImageHandler:
             scan[insert_y:insert_y+new_h, insert_x:insert_x+new_w] = resized
 
             save_path = output_path or scan_path
-            cv2.imwrite(save_path, scan, [cv2.IMWRITE_JPEG_QUALITY, 95])
+            _imwrite(save_path, scan)
 
             return {
                 'success': True,
